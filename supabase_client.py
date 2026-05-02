@@ -71,8 +71,8 @@ def upsert_lead(
         "hook": email_data.get("hook") or ("new_site" if (grade.get("total") or 5) <= 5 else "live_chat"),
     }
 
-    # Upsert on domain (update if exists, insert if not)
-    result = _request("POST", "leads?on_conflict=domain", lead)
+    # Always INSERT — rebuilds create a new lead row (dedup handled in the app)
+    result = _request("POST", "leads", lead)
 
     if result:
         lead_id = result[0]["id"] if isinstance(result, list) else result.get("id")
