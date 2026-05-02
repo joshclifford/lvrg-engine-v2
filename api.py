@@ -132,7 +132,9 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
 
         # ── Step 3: Generate site ────────────────────────────────────
         from slugify import slugify
-        prospect_id = slugify(domain.split(".")[0]) or slugify(domain.replace(".", "-"))
+        # Strip www. before building slug so www.foo.com → foo not www
+        _slug_domain = domain.lstrip('www.') if domain.startswith('www.') else domain
+        prospect_id = slugify(_slug_domain.split(".")[0]) or slugify(_slug_domain.replace(".", "-"))
 
         yield sse("log", text="Generating Smart Site with Claude...", level="info")
         if notes:
@@ -158,44 +160,46 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         email_data = await loop.run_in_executor(None, generate_email, intel, grade, prospect_id)
         yield sse("log", text="Messaging ready", level="success")
 
-        # ── Step 6: Save to Supabase ─────────────────────────────────
-        yield sse("log", text="Saving to Supabase...", level="info")
-        try:
-            sb_lead = await loop.run_in_executor(
-                None,
-                lambda: upsert_lead(
-                    domain=domain,
-                    intel=intel,
-                    grade=grade,
-                    preview_url=preview_url,
-                    email_data=email_data,
-                    instantly_lead_id=None,
-                    instantly_campaign_id=None,
-                    offer=offer,
-                    cta=cta,
-                    status="built",
+        # ── Step 6: Save to Supabase (skip on no_deploy / smoke test runs) ──
+        if no_deploy:
+            yield sse("log", text="Skipping Supabase save (test mode)", level="dim")
+        else:
+            yield sse("log", text="Saving to Supabase...", level="info")
+            try:
+                sb_lead = await loop.run_in_executor(
+                    None,
+                    lambda: upsert_lead(
+                        domain=domain,
+                        intel=intel,
+                        grade=grade,
+                        preview_url=preview_url,
+                        email_data=email_data,
+                        instantly_lead_id=None,
+                        instantly_campaign_id=None,
+                        offer=offer,
+                        cta=cta,
+                        status="built",
+                    )
                 )
-            )
-            if sb_lead:
+                if sb_lead:
+                    await loop.run_in_executor(
+                        None,
+                        lambda: log_event(sb_lead["id"], "site_built", {
+                            "preview_url": preview_url,
+                            "score": grade.get("total"),
+                        })
+                    )
+            except Exception as e:
+                yield sse("log", text=f"Supabase save failed: {e}", level="error")
+
+            # ── Step 6b: Write-back preview_url + email_json to engine_queue ──
+            try:
                 await loop.run_in_executor(
                     None,
-                    lambda: log_event(sb_lead["id"], "site_built", {
-                        "preview_url": preview_url,
-                        "score": grade.get("total"),
-                    })
+                    lambda: update_engine_queue_result(domain, preview_url, email_data)
                 )
-        except Exception as e:
-            yield sse("log", text=f"Supabase save failed: {e}", level="error")
-
-        # ── Step 6b: Write-back preview_url + email_json to engine_queue ──
-        # This lets the Engine page restore the result panel after navigation
-        try:
-            await loop.run_in_executor(
-                None,
-                lambda: update_engine_queue_result(domain, preview_url, email_data)
-            )
-        except Exception as e:
-            yield sse("log", text=f"Queue write-back skipped: {e}", level="dim")
+            except Exception as e:
+                yield sse("log", text=f"Queue write-back skipped: {e}", level="dim")
 
         # ── Done ─────────────────────────────────────────────────────
         yield sse("result", payload={
