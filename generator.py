@@ -346,8 +346,9 @@ Start with <!DOCTYPE html>"""
     return site_dir
 
 
-def generate_email(intel: dict, preview_url: str) -> dict:
-    """Generate cold outreach email with 3 subject lines."""
+def generate_email(intel: dict, grade: dict, prospect_id: str) -> dict:
+    """Generate cold outreach email. grade and prospect_id kept for api.py compatibility."""
+    preview_url = f"https://joshclifford.github.io/lvrg-previews/{prospect_id}/index.html"
     
     email_prompt = f"""Write a cold outreach email from {SENDER_NAME} at {SENDER_AGENCY} to the owner/decision maker of {intel['business_name']}.
 
@@ -405,9 +406,7 @@ Return as JSON:
             "recommended_subject": "b"
         }
     
-    # Grade determines angle
-    from intel import grade_site
-    grade = grade_site(intel)
+    # Grade determines angle (grade passed in from api.py)
     email_data["hook"] = "new_site" if grade.get("total", 5) <= 5 else "live_chat"
     
     return email_data
