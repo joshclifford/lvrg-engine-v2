@@ -21,7 +21,19 @@ from generator import generate_site, generate_email
 from deploy import deploy_site
 from supabase_client import upsert_lead, log_event, update_engine_queue_result
 
-app = FastAPI(title="LVRG Engine API", version="1.2.0")
+# Interactive docs are off unless ENABLE_DOCS is set. This service is public and
+# /chat is unauthenticated, so /openapi.json is a map of how to spend our credit.
+_DOCS = os.environ.get("ENABLE_DOCS", "").lower() in ("1", "true", "yes")
+
+# Version distinguishes v2 from v1 — both previously reported 1.2.0 on /health,
+# so there was no way to tell which engine served a given build.
+app = FastAPI(
+    title="LVRG Engine API v2",
+    version="2.0.0",
+    docs_url="/docs" if _DOCS else None,
+    redoc_url="/redoc" if _DOCS else None,
+    openapi_url="/openapi.json" if _DOCS else None,
+)
 
 
 @app.on_event("startup")
@@ -131,10 +143,8 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
             yield sse("log", text=f"Score {grade['total']}/10 — noted, building anyway", level="info")
 
         # ── Step 3: Generate site ────────────────────────────────────
-        from slugify import slugify
-        # Strip www. before building slug so www.foo.com → foo not www
-        _slug_domain = domain.lstrip('www.') if domain.startswith('www.') else domain
-        prospect_id = slugify(_slug_domain.split(".")[0]) or slugify(_slug_domain.replace(".", "-"))
+        from slug import make_slug
+        prospect_id = make_slug(domain)
 
         yield sse("log", text="Generating Smart Site with Claude...", level="info")
         if notes:
@@ -302,9 +312,10 @@ async def migrate():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.2.0"}
+    # Read from the app so the two engines can never report the same version again.
+    return {"status": "ok", "service": app.title, "version": app.version}
 
 
 @app.get("/")
 async def root():
-    return {"service": "LVRG Engine API", "endpoints": ["/build", "/health"]}
+    return {"service": app.title, "endpoints": ["/build", "/health"]}

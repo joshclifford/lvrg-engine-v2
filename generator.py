@@ -327,8 +327,17 @@ Start with <!DOCTYPE html>"""
     if html.startswith("```"):
         html = re.sub(r'^```[a-z]*\n?', '', html)
         html = re.sub(r'\n?```$', '', html)
-    
-    # Inject chat widget before </body>
+
+    # Close a truncated response before anything else touches it. Without this
+    # the widget injection below staples itself onto an unclosed document and we
+    # publish malformed HTML. Parity with v1 generator.py.
+    if not html.rstrip().endswith("</html>"):
+        if "</body>" not in html:
+            html += "\n</body>"
+        html += "\n</html>"
+
+    # Inject chat widget before </body> — now always present, so the else is
+    # only a belt-and-braces fallback.
     widget_html = _build_chat_widget(intel)
     if "</body>" in html:
         html = html.replace("</body>", widget_html + "\n</body>")

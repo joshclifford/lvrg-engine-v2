@@ -6,7 +6,7 @@ Reads from environment variables with fallbacks.
 import os
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-INSTANTLY_API_KEY = os.environ.get("INSTANTLY_API_KEY", "bd852b00-4eb9-4ec2-a68c-1234ae8cdae7:lZNMBZkkXwMz")
+INSTANTLY_API_KEY = os.environ.get("INSTANTLY_API_KEY", "")
 
 # Sender identity
 SENDER_NAME = "Josh"
@@ -31,4 +31,4 @@ INTEL_DIR = os.path.join(ENGINE_DIR, "output", "intel")
 os.makedirs(SITES_DIR, exist_ok=True)
 os.makedirs(EMAILS_DIR, exist_ok=True)
 os.makedirs(INTEL_DIR, exist_ok=True)
-FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "fc-558ee853c9dd4d87b8e3213eaa69c808")
+FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "")

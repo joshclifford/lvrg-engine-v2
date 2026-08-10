@@ -19,7 +19,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-FIRECRAWL_KEY = os.environ.get("FIRECRAWL_API_KEY", "fc-558ee853c9dd4d87b8e3213eaa69c808")
+FIRECRAWL_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
 
 
 def fetch_site_content(domain: str) -> str:
@@ -192,13 +192,19 @@ def scrape_site(domain: str) -> dict:
     print(f"  [intel] Fetching {url}...")
     
     raw_text = fetch_site_content(domain)
-    
-    if raw_text:
-        print(f"  [intel] Extracting structured intel with Claude...")
-        extracted = extract_intel_with_claude(domain, raw_text)
-    else:
-        extracted = {}
-    
+
+    # Never build from an unread site. Without this the model invents the whole
+    # business from the domain string and we publish a fiction under a real
+    # company's name — see familydentalcare.com, 2026-08-04.
+    if not raw_text:
+        raise ValueError(
+            f"Could not read {url} — unreachable or returned nothing. "
+            f"Refusing to build a site for a business we never read."
+        )
+
+    print(f"  [intel] Extracting structured intel with Claude...")
+    extracted = extract_intel_with_claude(domain, raw_text)
+
     business_name = extracted.get("business_name") or domain.split(".")[0].replace("-", " ").title()
     location = extracted.get("location", "San Diego, CA")
 
