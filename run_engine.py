@@ -23,9 +23,9 @@ import json
 import argparse
 import time
 from datetime import datetime
-from slugify import slugify
 
 # Engine modules
+from slug import make_slug
 from intel import scrape_site, grade_site
 from generator import generate_site, generate_email
 from deploy import deploy_site
@@ -43,10 +43,9 @@ def process_prospect(domain: str, campaign_id: str, args) -> dict:
     if not domain:
         return None
     
-    # Generate a clean ID
-    prospect_id = slugify(domain.split(".")[0])
-    if not prospect_id:
-        prospect_id = slugify(domain.replace(".", "-"))
+    # Generate a clean ID — shared with api.py so the CLI and the API can never
+    # produce different slugs for the same domain again.
+    prospect_id = make_slug(domain)
     
     print(f"\n{'='*60}")
     print(f"PROCESSING: {domain}")

@@ -7,9 +7,18 @@ No git clone needed. No file size limits.
 import os
 import base64
 import json
+import time
 import urllib.request
 import urllib.error
 from config import GITHUB_USER, GITHUB_REPO, PREVIEW_BASE_URL
+
+# GitHub Pages builds asynchronously, so the URL is not live the moment the commit
+# ref moves — that gap is what put 404s in front of prospects. We poll before
+# returning, but the window has to fit the caller's budget: leadscraper aborts the
+# whole engine call at 135s (build-smart-site ENGINE_TIMEOUT_MS) and a build already
+# takes 85-95s. Raise this only if that budget goes up too.
+PAGES_VERIFY_TIMEOUT = int(os.environ.get("PAGES_VERIFY_TIMEOUT", "40"))
+PAGES_VERIFY_INTERVAL = 4
 
 
 def _api(method: str, path: str, body: dict = None) -> dict:
@@ -26,6 +35,27 @@ def _api(method: str, path: str, body: dict = None) -> dict:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"GitHub API {method} {path} → {e.code}: {e.read().decode()}")
+
+
+def _is_live(url: str) -> bool:
+    """True once GitHub Pages actually serves the page."""
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        req.add_header("User-Agent", "lvrg-engine")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except Exception:
+        return False  # not propagated yet, or a transient blip
+
+
+def _wait_until_live(url: str) -> bool:
+    """Poll until the preview resolves. False means we ran out of budget."""
+    deadline = time.monotonic() + PAGES_VERIFY_TIMEOUT
+    while time.monotonic() < deadline:
+        if _is_live(url):
+            return True
+        time.sleep(PAGES_VERIFY_INTERVAL)
+    return _is_live(url)
 
 
 def deploy_site(prospect_id: str, site_dir: str) -> str:
@@ -80,5 +110,15 @@ def deploy_site(prospect_id: str, site_dir: str) -> str:
     })
 
     public_url = f"{PREVIEW_BASE_URL}/{prospect_id}/index.html"
-    print(f"  [deploy] Live at: {public_url}")
+
+    # Say what actually happened. Returning an unverified URL silently is how a
+    # link that 404s ends up in a prospect's inbox looking fine from our side.
+    if _wait_until_live(public_url):
+        print(f"  [deploy] Live at: {public_url}")
+    else:
+        print(
+            f"  [deploy] WARNING: pushed, but Pages had not served it after "
+            f"{PAGES_VERIFY_TIMEOUT}s — returning UNVERIFIED {public_url}"
+        )
+
     return public_url
