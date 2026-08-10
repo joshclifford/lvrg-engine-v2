@@ -19,7 +19,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-FIRECRAWL_KEY = os.environ.get("FIRECRAWL_API_KEY", "fc-558ee853c9dd4d87b8e3213eaa69c808")
+FIRECRAWL_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
 
 
 def fetch_site_content(domain: str) -> str:
