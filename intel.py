@@ -52,24 +52,49 @@ _PROMO_IMAGE = re.compile(
 _WP_THUMB = re.compile(r"-(\d{2,4})x(\d{2,4})(\.(?:jpe?g|png|webp))$", re.I)
 
 
+def _sans_host(url: str) -> str:
+    """Path + query — everything except the HOST.
+
+    Scope for the unanchored substring filters (_JUNK_IMAGE, _PROMO_IMAGE).
+    Running those against the full URL let a prospect's own domain match:
+    blankslatecoffee.com hit "blank", badgerroofing.com hit "badge", and the
+    business lost every candidate photo to its own name.
+
+    The host is the whole defect, so the host is all that comes off. Dropping
+    the QUERY too would blind the filters to CDNs that carry the filename there
+    (`/cdn?file=logo.png`) — a different silent failure on a different set of
+    sites, which is exactly the trade _PHOTO_EXT already refuses to make.
+
+    Not for the $-anchored checks (extension, _WP_THUMB): those must see a
+    string that ENDS at the filename, so they keep using the bare path.
+    """
+    parts = urlparse(url)
+    return parts.path + (("?" + parts.query) if parts.query else "")
+
+
 def _photo_score(url: str) -> int:
     """Rank candidates so the hero is a photo, not a promo banner.
 
     Ordering used to be document order, which put AccuLynx's "GIVEAWAY" graphic
     ahead of their product screenshot.
     """
-    # Path only. Scoring the whole URL let the HOST match _PROMO_IMAGE, so a
+    # Host excluded. Scoring the whole URL let the HOST match _PROMO_IMAGE, so a
     # business at promo-plumbing.com had every one of its photos penalised
     # equally — see the _JUNK_IMAGE note in extract_photos, same root cause.
     bare = urlparse(url).path
+    scannable = _sans_host(url)
     score = 0
 
     # Photographs are overwhelmingly JPEG/WebP. Transparent PNGs are logos,
     # cut-outs and composites — they render badly behind object-fit: cover.
+    # Anchored at $, so it reads the bare path: `/photo.jpg?v=2` must still
+    # score as a JPEG.
     if re.search(r"\.(jpe?g|webp)$", bare, re.I):
         score += 3
 
-    if _PROMO_IMAGE.search(bare):
+    # Unanchored, so it reads path+query — campaign artwork served as
+    # `/cdn?file=giveaway-banner.jpg` has to keep its penalty.
+    if _PROMO_IMAGE.search(scannable):
         score -= 5
 
     m = _WP_THUMB.search(bare)
@@ -220,14 +245,19 @@ def extract_photos(html: str, base_url: str, limit: int = 6) -> list:
         # failure being fixed two lines below.
         if not _PHOTO_EXT.search(absolute):
             continue          # skips .svg, .gif and extensionless endpoints
-        # The JUNK check, by contrast, must see the PATH only. Against the full
-        # url it also matched the HOST, and _JUNK_IMAGE contains substrings that
+        # The JUNK check, by contrast, must not see the HOST. Against the full
+        # url it also matched the host, and _JUNK_IMAGE contains substrings that
         # occur in ordinary business names — so a prospect at
         # blankslatecoffee.com, badgerroofing.com, arrowplumbing.com or
         # iconicdental.com matched on their own domain, lost every candidate,
         # and fell back to gradients with nothing logged. Same silent-fallback
         # shape as the Yelp 403 this code replaced.
-        if _JUNK_IMAGE.search(urlparse(absolute).path):
+        #
+        # Host only — NOT the query. `_sans_host`, not `urlparse(...).path`: the
+        # same CDNs that put the extension in the query put the filename there
+        # too, so a path-only check waves `/cdn?file=logo.png` through and the
+        # prospect's logo becomes the hero of their own rebuilt page.
+        if _JUNK_IMAGE.search(_sans_host(absolute)):
             continue
         key = absolute.split("?")[0]
         if key in seen:

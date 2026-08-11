@@ -89,8 +89,54 @@ def test_query_string_extension_is_not_dropped():
     assert photos, "an image whose extension is in the query string was dropped"
 
 
-def test_junk_is_still_path_scoped_when_the_extension_is_in_the_query():
+def test_junk_is_still_scoped_out_when_the_extension_is_in_the_query():
     photos = extract_photos(
         '<img src="/logo?file=brand.png">', "https://example.com"
     )
     assert photos == []
+
+
+def test_junk_in_the_QUERY_is_dropped():
+    """Regression on the fix, second direction.
+
+    The first version of this fix scoped the junk check to `urlparse(u).path`,
+    which drops the query as well as the host. CDNs that serve
+    `/cdn?file=logo.png` then sailed straight through — and because the dedup
+    key is `absolute.split("?")[0]`, every asset on such a site collapses to one
+    entry, so the surviving logo became the hero of the prospect's own rebuilt
+    page. Measured before the fix: this returned the logo where the pre-PR code
+    had returned the storefront.
+
+    `_sans_host` removes the host and nothing else, which is the only part that
+    ever caused a false positive.
+    """
+    photos = extract_photos(
+        '<img src="/cdn?file=logo.png"><img src="/cdn?file=storefront.jpg">',
+        "https://acmeroofing.com",
+    )
+    assert photos, "the real photo was lost"
+    assert not any("logo" in p for p in photos), "a CDN-served logo survived the junk filter"
+    assert photos[0].endswith("file=storefront.jpg")
+
+
+def test_promo_in_the_QUERY_still_loses_its_penalty_race():
+    """Same hole, ranking side: campaign artwork served through a CDN query
+    must keep the -5 that pushes it out of the hero slot."""
+    assert _photo_score("https://example.com/cdn?file=giveaway-banner.jpg") < 0
+    assert _photo_score("https://example.com/cdn?file=storefront.jpg") > 0
+
+
+def test_query_scoping_did_not_re_break_the_host_case():
+    """The host must still be invisible to both filters — that is the original
+    bug, and widening the scope back to path+query must not undo it."""
+    for host in TRAP_HOSTS:
+        assert extract_photos(HTML, f"https://{host}"), f"{host} regressed"
+    assert _photo_score("https://promoplumbing.com/img/storefront.jpg") > 0
+
+
+def test_extension_bonus_survives_a_query_string():
+    """`.jpg?v=2` is still a JPEG. The extension check is $-anchored, so it
+    reads the bare path — widening it to path+query would silently zero this."""
+    assert _photo_score("https://example.com/img/photo.jpg?v=2") == _photo_score(
+        "https://example.com/img/photo.jpg"
+    )
