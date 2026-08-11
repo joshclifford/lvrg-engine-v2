@@ -259,13 +259,15 @@ Only use a photo if it makes sense in context — don't force it."""
     rating = intel.get("rating")
     review_count = intel.get("review_count")
     has_rating = rating is not None
+    has_review_count = review_count is not None
+    rating_stat = f"{rating}★ ({review_count} reviews)" if has_review_count else f"{rating}★"
 
     if reviews:
         reviews_block = f"""REAL CUSTOMER REVIEWS (use these verbatim as testimonials — do not make up quotes):
-{f'Rating: {rating}★ ({review_count} reviews){chr(10)}' if has_rating else ''}{chr(10).join(f'  "{r}"' for r in reviews[:3])}"""
+{f'Rating: {rating_stat}{chr(10)}' if has_rating else ''}{chr(10).join(f'  "{r}"' for r in reviews[:3])}"""
     elif has_rating:
         reviews_block = (
-            f"SOCIAL PROOF: This business is rated {rating}★ from {review_count} reviews. "
+            f"SOCIAL PROOF: This business is rated {rating_stat}. "
             f"Use that as a stat. You have NO review text — do NOT write testimonial quotes."
         )
     else:

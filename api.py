@@ -131,7 +131,11 @@ def _merge_known(intel: dict, known: dict) -> list:
     # told never to invent one, so passing it is the only way a page gets stars.
     if known.get("rating") is not None:
         intel["rating"] = known["rating"]
-        intel["review_count"] = known.get("review_count")
+        # Only set when present — the caller may send a rating with no
+        # review count, and an unconditional None here renders as the
+        # literal string "None" in the generator's prompt.
+        if known.get("review_count") is not None:
+            intel["review_count"] = known["review_count"]
         used.append("rating")
 
     socials = {k: known[k] for k in ("facebook_url", "instagram_url", "linkedin_url")
