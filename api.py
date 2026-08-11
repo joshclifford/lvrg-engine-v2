@@ -131,7 +131,14 @@ def _merge_known(intel: dict, known: dict) -> list:
     # told never to invent one, so passing it is the only way a page gets stars.
     if known.get("rating") is not None:
         intel["rating"] = known["rating"]
-        intel["review_count"] = known.get("review_count")
+        # Only overwrite the count when we actually have one. Writing it
+        # unconditionally passed None straight through to the generator prompt,
+        # which rendered it as the literal string: "rated 4.5★ from None
+        # reviews" — on a page carrying the prospect's own branding, labelled to
+        # the model as a real social-proof stat. Apify returns a rating without
+        # a count for some Maps listings, so this is not a rare path.
+        if known.get("review_count") is not None:
+            intel["review_count"] = known["review_count"]
         used.append("rating")
 
     socials = {k: known[k] for k in ("facebook_url", "instagram_url", "linkedin_url")

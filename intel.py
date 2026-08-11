@@ -17,7 +17,7 @@ import time
 import re
 import anthropic
 from html import unescape as _unescape
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from config import INTEL_DIR
 
 def _get_client():
@@ -58,7 +58,10 @@ def _photo_score(url: str) -> int:
     Ordering used to be document order, which put AccuLynx's "GIVEAWAY" graphic
     ahead of their product screenshot.
     """
-    bare = url.split("?")[0]
+    # Path only. Scoring the whole URL let the HOST match _PROMO_IMAGE, so a
+    # business at promo-plumbing.com had every one of its photos penalised
+    # equally — see the _JUNK_IMAGE note in extract_photos, same root cause.
+    bare = urlparse(url).path
     score = 0
 
     # Photographs are overwhelmingly JPEG/WebP. Transparent PNGs are logos,
@@ -86,6 +89,16 @@ _UPGRADE_BELOW_WIDTH = 800
 # graphics are ~1.5 MB each; four of those is a 6 MB page.
 _MAX_UPGRADE_BYTES = 900_000
 
+# Each upgrade costs a blocking HEAD, and the caller's budget has no slack:
+# generation alone is ~82s of the 135s ceiling, on top of a 25s Firecrawl scrape
+# and a 15s Pages verify. Six upgrades at 4s each could add 24s and push the
+# whole build past a deadline deploy.py's own comment says cannot be raised.
+# Worse in v2: these seconds come out of INTEL_BUDGET_SECONDS, which is measured
+# around this call, so a slow upgrade silently eats the press search instead.
+# Only the hero and its fallback materially benefit from a full-size swap.
+_UPGRADE_TOP_N = 2
+_UPGRADE_HEAD_TIMEOUT = 2
+
 
 def _full_size(url: str) -> str:
     """Trade a small WordPress crop for the original, when that's an improvement.
@@ -101,7 +114,8 @@ def _full_size(url: str) -> str:
 
     candidate = _WP_THUMB.sub(r"\3", bare)
     try:
-        resp = requests.head(candidate, headers=HEADERS, timeout=4, allow_redirects=True)
+        resp = requests.head(candidate, headers=HEADERS,
+                             timeout=_UPGRADE_HEAD_TIMEOUT, allow_redirects=True)
         if resp.status_code != 200:
             return url
         if not resp.headers.get("Content-Type", "").startswith("image/"):
@@ -199,9 +213,21 @@ def extract_photos(html: str, base_url: str, limit: int = 6) -> list:
         absolute = urljoin(base_url, src)
         if not absolute.startswith(("http://", "https://")):
             continue
+        # Extension check stays on the FULL url: _PHOTO_EXT allows the
+        # extension to sit in the query (`(\?|$)`), and some CDNs serve
+        # `/img?file=photo.jpg`. Narrowing this to the path would drop those —
+        # re-creating, on a different set of sites, the silent zero-photo
+        # failure being fixed two lines below.
         if not _PHOTO_EXT.search(absolute):
             continue          # skips .svg, .gif and extensionless endpoints
-        if _JUNK_IMAGE.search(absolute):
+        # The JUNK check, by contrast, must see the PATH only. Against the full
+        # url it also matched the HOST, and _JUNK_IMAGE contains substrings that
+        # occur in ordinary business names — so a prospect at
+        # blankslatecoffee.com, badgerroofing.com, arrowplumbing.com or
+        # iconicdental.com matched on their own domain, lost every candidate,
+        # and fell back to gradients with nothing logged. Same silent-fallback
+        # shape as the Yelp 403 this code replaced.
+        if _JUNK_IMAGE.search(urlparse(absolute).path):
             continue
         key = absolute.split("?")[0]
         if key in seen:
@@ -214,7 +240,9 @@ def extract_photos(html: str, base_url: str, limit: int = 6) -> list:
     # Position stays as the tie-breaker so equal-quality images keep page order.
     kept.sort(key=lambda pair: (-_photo_score(pair[0]), pair[1]))
 
-    return [_full_size(url) for url, _ in kept[:limit]]
+    # Only the top candidates pay for a full-size lookup — see _UPGRADE_TOP_N.
+    return [_full_size(url) if i < _UPGRADE_TOP_N else url
+            for i, (url, _) in enumerate(kept[:limit])]
 
 
 def _mentions_business(sentence: str, business_name: str) -> bool:
@@ -298,6 +326,19 @@ def fetch_press_mentions(business_name: str, location: str = "") -> list:
         return []
 
 
+# Bound the extraction prompt. Dropping the 4,000-char scrape cap was right —
+# it truncated half a homepage before the model ever saw it — but nothing
+# replaced it, so the full page went into this Haiku call with no ceiling.
+# Firecrawl runs with onlyMainContent: False, and the direct-fetch fallback
+# strips tags off raw HTML so inline JSON survives as "text"; both can be very
+# large. 60k chars is roughly 15k tokens: comfortably a whole homepage, and
+# small enough that no page can fail a build on prompt size.
+#
+# Note the asymmetry this restores: scrape_site already caps the GENERATOR's
+# slice at raw_text[:6000]. Only the extraction prompt was unbounded.
+EXTRACT_MAX_CHARS = int(os.environ.get("EXTRACT_MAX_CHARS", "60000"))
+
+
 def extract_intel_with_claude(domain: str, raw_text: str) -> dict:
     """Use Claude to extract structured intel from raw site content."""
     
@@ -326,7 +367,7 @@ Extract and return a JSON object with these fields:
 - chat_persona: How an AI chat agent should behave for this business in one sentence (string)
 - cta_angle: The best CTA angle for this business - what they most want customers to do (string, e.g. "Book a Private Event", "Get a Free Quote", "Reserve a Table")
 - owner_name: Owner or decision maker first name if mentioned anywhere on the site (string, empty if not found)
-- neighborhood: Specific San Diego neighborhood or area (string, e.g. "North Park", "Little Italy", "Gaslamp", empty if unknown)
+- neighborhood: The specific neighborhood or district the business is in, parsed from the location field (string, e.g. "North Park", "Wicker Park", "Southie", empty if unknown)
 
 Return ONLY valid JSON, no markdown, no explanation."""
 
@@ -380,7 +421,15 @@ def scrape_site(domain: str) -> dict:
         )
 
     print(f"  [intel] Extracting structured intel with Claude...")
-    extracted = extract_intel_with_claude(domain, raw_text)
+    if len(raw_text) > EXTRACT_MAX_CHARS:
+        print(f"  [intel] Page is {len(raw_text)} chars — capping extraction "
+              f"input at {EXTRACT_MAX_CHARS}")
+    # Deliberately NOT wrapped in a try/except that returns {}. With extracted
+    # empty, business_name falls back to the domain string and every other field
+    # to its default — which is the fabricated-business path the empty-scrape
+    # guard above exists to block. An extraction failure must keep propagating
+    # so the build fails cleanly and refunds. The cap is what makes it rare.
+    extracted = extract_intel_with_claude(domain, raw_text[:EXTRACT_MAX_CHARS])
 
     business_name = extracted.get("business_name") or domain.split(".")[0].replace("-", " ").title()
     location = extracted.get("location", "")
@@ -432,14 +481,17 @@ def scrape_site(domain: str) -> dict:
         # V2 enrichment
         "photos": photos,
         "press_mentions": press,
-        # Rating and reviews are real data the app already holds (Google Maps via
-        # Apify). api.py merges them in from engine_queue when present. We no
-        # longer scrape them — the old Yelp regex matched any JSON field named
-        # "text" and handed arbitrary strings to the model as verbatim customer
-        # testimonials, which is worse than inventing one.
+        # Rating and review count are real data the app already holds (Google
+        # Maps via Apify). api.py merges them in from engine_queue when present.
+        # We no longer scrape them — the old Yelp regex matched any JSON field
+        # named "text" and handed arbitrary strings to the model as verbatim
+        # customer testimonials, which is worse than inventing one.
+        #
+        # There is no "reviews" key: review TEXT has no trusted source, so the
+        # generator has no branch that could consume one. Adding it back here
+        # would silently re-arm quote generation.
         "rating": None,
         "review_count": None,
-        "reviews": [],
     }
     
     print(f"  [intel] ✓ {intel['business_name']} — {intel['business_type']} — {intel['location']}")
@@ -462,7 +514,12 @@ def grade_site(intel: dict) -> dict:
     contact_score = 0
     if intel.get("phone"): contact_score += 4
     if intel.get("email"): contact_score += 3
-    if intel.get("location") and intel["location"] != "San Diego, CA": contact_score += 3
+    # Was `!= "San Diego, CA"`, which stood in for "location was not extracted"
+    # back when that string was the default. v2 already changed the default to
+    # empty, which left this comparison dead — it could only ever fire against a
+    # business genuinely in San Diego, silently scoring them 3 points lower than
+    # an identical one in Boston. The truthiness check is now the whole test.
+    if intel.get("location"): contact_score += 3
     scores["contact"] = min(contact_score, 10)
     sp = intel.get("social_proof", "")
     scores["social_proof"] = 8 if len(sp) > 50 else (5 if len(sp) > 10 else 2)
