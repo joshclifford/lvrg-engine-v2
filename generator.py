@@ -271,6 +271,11 @@ Only use a photo if it makes sense in context — don't force it."""
     rating = intel.get("rating")
     review_count = intel.get("review_count")
 
+    # Resolved against 1b89852 (Hamza, same bug, same day). That commit fixed the
+    # None rendering but KEPT the `if reviews:` branch — which is unreachable
+    # (nothing populates intel["reviews"]) and still carried "use these verbatim
+    # as testimonials". Deleting it is the point of this change, so the deletion
+    # wins and rating_stat goes with it.
     if rating is not None and review_count is not None:
         reviews_block = (
             f"SOCIAL PROOF: This business is rated {rating}★ from {review_count} reviews. "
