@@ -8,7 +8,7 @@ import json
 import os
 import sys
 from datetime import datetime
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -82,6 +82,11 @@ class BuildRequest(BaseModel):
     offer: str = "Smart Site"
     cta: str = "Book a Call"
     notes: str = ""
+    # Optional R6 audit pillar breakdown from the caller (leadscraper's
+    # build-smart-site edge fn). None for any caller that doesn't send one
+    # (MCP tool, smoke_test.sh, direct API calls) — generator.py falls back
+    # to its existing Claude-extracted pain_point when this is absent.
+    r6: Optional[dict] = None
 
 
 class ChatRequest(BaseModel):
@@ -95,7 +100,7 @@ def sse(type: str, **kwargs) -> str:
     return f"data: {json.dumps({'type': type, **kwargs})}\n\n"
 
 
-async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "") -> AsyncGenerator[str, None]:
+async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", r6: Optional[dict] = None) -> AsyncGenerator[str, None]:
     """Run the full engine pipeline, yielding SSE events."""
 
     loop = asyncio.get_event_loop()
@@ -149,7 +154,9 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         yield sse("log", text="Generating Smart Site with Claude...", level="info")
         if notes:
             yield sse("log", text=f"Notes: {notes}", level="info")
-        site_dir = await loop.run_in_executor(None, generate_site, intel, prospect_id, notes)
+        if r6:
+            yield sse("log", text="Grounding copy in R6 audit's weakest pillar", level="info")
+        site_dir = await loop.run_in_executor(None, generate_site, intel, prospect_id, notes, r6)
         yield sse("log", text="Site generated", level="success")
 
         # ── Step 4: Deploy ───────────────────────────────────────────
@@ -167,7 +174,7 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
 
         # ── Step 5: Generate email ───────────────────────────────────
         yield sse("log", text="Writing outreach messaging...", level="info")
-        email_data = await loop.run_in_executor(None, generate_email, intel, grade, prospect_id)
+        email_data = await loop.run_in_executor(None, generate_email, intel, grade, prospect_id, r6)
         yield sse("log", text="Messaging ready", level="success")
 
         # ── Step 6: Save to Supabase (skip on no_deploy / smoke test runs) ──
@@ -236,7 +243,7 @@ async def build(req: BuildRequest):
         raise HTTPException(status_code=400, detail="domain is required")
 
     return StreamingResponse(
-        run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes),
+        run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes, req.r6),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
