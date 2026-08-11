@@ -71,7 +71,12 @@ def upsert_lead(
         "hook": email_data.get("hook") or ("new_site" if (grade.get("total") or 5) <= 5 else "live_chat"),
     }
 
-    # Always INSERT — rebuilds create a new lead row (dedup handled in the app)
+    # Always INSERT — rebuilds create a new lead row rather than overwriting the
+    # previous one, so a rebuild can never destroy outreach history already
+    # attached to it (commit dfc6a56). Collapsing those rows back down to one
+    # per business is the reader's job, and it now happens in lm-tool:
+    # `currentLeadPerDomain` in lib/leads.ts, applied by getLeads() and the
+    # dashboard leads page. Keep the DESC ordering there if you touch it.
     result = _request("POST", "leads", lead)
 
     if result:

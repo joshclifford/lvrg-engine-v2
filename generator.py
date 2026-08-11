@@ -2,9 +2,9 @@
 LVRG Lead Magnet Engine V2 — Site + Email Generator
 V2 improvements:
   - Tailwind CDN (no inline-style constraint)
-  - Real Yelp photos passed as <img> URLs
-  - Real Yelp reviews as testimonials
-  - Press/media mentions pulled in
+  - Real photos from the prospect's own site, passed as <img> URLs
+  - Real ratings/reviews passed in from the app — never scraped, never invented
+  - Press/media mentions pulled in via Firecrawl search
   - Business-type design personalities
   - Better headline direction
 """
@@ -15,6 +15,15 @@ import json
 import anthropic
 
 from config import SITES_DIR, BOOKING_URL, SENDER_NAME, SENDER_AGENCY
+
+# Ceiling for a generated page. This is a cap, not a target — most pages come in
+# well under it, so raising it costs nothing on a typical build and only helps
+# the pages that were previously cut off. Deliberately not 128K: the caller
+# aborts the whole engine call at 135s (build-smart-site ENGINE_TIMEOUT_MS) and
+# generation already runs ~82s, so an unbounded ceiling would trade truncated
+# pages for timed-out builds.
+SITE_MAX_TOKENS = int(os.environ.get("SITE_MAX_TOKENS", "32000"))
+
 
 def _get_client():
     key = os.environ.get("ANTHROPIC_API_KEY") or ""
@@ -203,27 +212,38 @@ def generate_site(intel: dict, prospect_id: str, notes: str = "") -> str:
     notes_block = f"\n\nSPECIAL INSTRUCTIONS:\n{notes}\n" if notes else ""
     design = _get_design_personality(intel.get("business_type", "other"))
     
-    # Build photo block — only use real Yelp photos, skip if none
-    yelp_photos = intel.get("yelp_photos", [])
-    if yelp_photos:
-        photo_block = f"""REAL PHOTOS (use these as actual <img> tags — link directly to the URLs):
-{chr(10).join(f'  {i+1}. {url}' for i, url in enumerate(yelp_photos[:4]))}
+    # Build photo block — real photos from the prospect's own site
+    photos = intel.get("photos", [])
+    if photos:
+        photo_block = f"""REAL PHOTOS (these are from the business's own website — use them as actual <img> tags, link directly to the URLs):
+{chr(10).join(f'  {i+1}. {url}' for i, url in enumerate(photos[:4]))}
 Use the best photo as the hero background (as an <img> with object-fit:cover, or as a CSS background-image url()).
 Use others in gallery/services sections where they fit naturally.
 Only use a photo if it makes sense in context — don't force it."""
     else:
         photo_block = "PHOTOS: No real photos available. Use CSS gradients and brand colors only — no placeholder images."
-    
-    # Build reviews block — real Yelp reviews only
-    yelp_reviews = intel.get("yelp_reviews", [])
-    yelp_rating = intel.get("yelp_rating")
-    yelp_count = intel.get("yelp_review_count")
-    if yelp_reviews:
+
+    # Build reviews block. Rating/reviews are real data passed in from the app
+    # (Google Maps via Apify), never scraped. If we don't have them, say nothing
+    # rather than inventing social proof.
+    reviews = intel.get("reviews", [])
+    rating = intel.get("rating")
+    review_count = intel.get("review_count")
+    has_rating = rating is not None
+
+    if reviews:
         reviews_block = f"""REAL CUSTOMER REVIEWS (use these verbatim as testimonials — do not make up quotes):
-Rating: {yelp_rating}★ ({yelp_count} reviews on Yelp)
-{chr(10).join(f'  "{r}"' for r in yelp_reviews[:3])}"""
+{f'Rating: {rating}★ ({review_count} reviews){chr(10)}' if has_rating else ''}{chr(10).join(f'  "{r}"' for r in reviews[:3])}"""
+    elif has_rating:
+        reviews_block = (
+            f"SOCIAL PROOF: This business is rated {rating}★ from {review_count} reviews. "
+            f"Use that as a stat. You have NO review text — do NOT write testimonial quotes."
+        )
     else:
-        reviews_block = f"REVIEWS: No Yelp reviews available. Use the rating {yelp_rating}★ ({yelp_count} reviews) as a social proof stat if available, but do NOT write fake testimonial quotes."
+        reviews_block = (
+            "REVIEWS: None available. Do NOT write testimonial quotes, do NOT invent "
+            "star ratings, and do NOT add a testimonials section."
+        )
 
     # Build press block
     press_mentions = intel.get("press_mentions", [])
@@ -232,6 +252,11 @@ Rating: {yelp_rating}★ ({yelp_count} reviews on Yelp)
 {chr(10).join(f'  - {p["source"]}: "{p["title"]}"' + (f' — "{p["quote"]}"' if p.get("quote") else '') for p in press_mentions[:3])}"""
     else:
         press_block = "PRESS: No press mentions found."
+
+    # Social profiles come from the app (Apify), merged in by api.py.
+    socials = intel.get("socials") or {}
+    social_links = "\n".join(f"  {k.replace('_url', '').title()}: {v}" for k, v in socials.items())
+    social_block = f"SOCIAL PROFILES (link these in the footer):\n{social_links}" if social_links else ""
 
     site_prompt = f"""You are building a high-end preview website for {intel['business_name']}.{notes_block}
 
@@ -256,6 +281,8 @@ Rating: {yelp_rating}★ ({yelp_count} reviews on Yelp)
 {reviews_block}
 
 {press_block}
+
+{social_block}
 
 ━━━ DESIGN PERSONALITY ━━━
 Mood: {design['mood']}
@@ -290,12 +317,14 @@ Build a single-file HTML homepage (index.html).
    Good: "Where the regulars send their friends"
    One bold headline + one supporting line. Two CTAs.
 
-4. SOCIAL PROOF BAR — use REAL stats: Yelp rating, review count, years open, awards
+4. SOCIAL PROOF BAR — only stats given to you above (rating, review count,
+   years open, awards). If none were given, omit this section entirely.
 
 5. SERVICES/MENU — 3 feature cards using their REAL services
 
-6. TESTIMONIALS — ONLY use real Yelp quotes provided above.
-   If none available, use a social proof stat block instead (no fake quotes).
+6. TESTIMONIALS — ONLY the review quotes provided above, verbatim.
+   If none were provided, OMIT this section. Never invent a quote, a customer
+   name, or a star rating.
 
 7. PRESS / AS SEEN IN — if press mentions provided, show source logos as text badges.
    Skip this section entirely if no press.
@@ -315,12 +344,20 @@ Return ONLY the complete HTML. No explanation. No markdown fences. No chat widge
 Start with <!DOCTYPE html>"""
 
     client = _get_client()
-    response = client.messages.create(
+    # Streamed, not create(). A full page runs well past the SDK's non-streaming
+    # HTTP timeout at this token ceiling; streaming also lets max_tokens rise
+    # without the request dying mid-generation. get_final_message() gives the
+    # same object create() would have returned.
+    with client.messages.stream(
         model="claude-opus-4-5",
-        max_tokens=14000,
-        messages=[{"role": "user", "content": site_prompt}]
-    )
-    
+        max_tokens=SITE_MAX_TOKENS,
+        messages=[{"role": "user", "content": site_prompt}],
+    ) as stream:
+        response = stream.get_final_message()
+
+    if response.stop_reason == "max_tokens":
+        print(f"  [generator] WARNING: hit max_tokens ({SITE_MAX_TOKENS}) — page may be cut short")
+
     html = response.content[0].text.strip()
     
     # Strip markdown fences if Claude wrapped it
