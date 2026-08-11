@@ -12,6 +12,7 @@ V2 improvements:
 import os
 import re
 import json
+from typing import Optional
 import anthropic
 
 from config import SITES_DIR, BOOKING_URL, SENDER_NAME, SENDER_AGENCY
@@ -85,6 +86,33 @@ DESIGN_PERSONALITIES = {
 
 def _get_design_personality(business_type: str) -> dict:
     return DESIGN_PERSONALITIES.get(business_type, DESIGN_PERSONALITIES["other"])
+
+
+def _pain_point_context(intel: dict, r6: Optional[dict]) -> str:
+    """Blend Claude's site-content-extracted pain_point with the R6 audit's
+    weakest pillar (when the caller sent one) — real audit signal on top of,
+    not instead of, the extraction. Falls back to the extracted pain_point
+    unchanged when r6 is absent, so every existing caller (MCP tool, smoke
+    tests, direct API calls without R6 data) is byte-for-byte unaffected."""
+    extracted = intel.get("pain_point", "")
+    if not r6:
+        return extracted
+
+    pillar = r6.get("weakest_pillar")
+    score = r6.get("weakest_pillar_score")
+    notes = r6.get("weakest_pillar_notes", "")
+    if not pillar:
+        return extracted
+
+    label = str(pillar).replace("_", " ").title()
+    r6_line = f"R6 audit flags {label} as the weakest pillar"
+    if isinstance(score, (int, float)):
+        r6_line += f" ({score}/100)"
+    if notes:
+        r6_line += f": {notes}"
+
+    parts = [p for p in (extracted, r6_line) if p]
+    return " ".join(parts)
 
 
 def _build_chat_widget(intel: dict) -> str:
@@ -204,13 +232,14 @@ function lvrgAddMsg(text, role) {{
 """
 
 
-def generate_site(intel: dict, prospect_id: str, notes: str = "") -> str:
+def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[dict] = None) -> str:
     """Generate a complete single-file HTML site for a prospect. Returns folder path."""
-    
+
     print(f"  [generator] Generating V2 site for {intel['business_name']}...")
-    
+
     notes_block = f"\n\nSPECIAL INSTRUCTIONS:\n{notes}\n" if notes else ""
     design = _get_design_personality(intel.get("business_type", "other"))
+    pain_point = _pain_point_context(intel, r6)
     
     # Build photo block — real photos from the prospect's own site
     photos = intel.get("photos", [])
@@ -272,7 +301,7 @@ Only use a photo if it makes sense in context — don't force it."""
 - Hours: {intel.get('hours', 'Not listed')}
 - Brand vibe: {intel.get('brand_vibe', 'clean, modern')}
 - Primary color: {intel.get('primary_color', '#333')}
-- Pain point: {intel.get('pain_point', '')}
+- Pain point: {pain_point}
 - CTA: {intel.get('cta_angle', 'Get in Touch')}
 
 ━━━ REAL CONTENT ━━━
@@ -336,7 +365,7 @@ Build a single-file HTML homepage (index.html).
 ━━━ COPY RULES ━━━
 - Reference {intel.get('neighborhood') or intel.get('location','').split(',')[0]} naturally in copy
 - Every CTA drives toward: {intel.get('cta_angle', 'booking')}
-- Address this pain point: {intel.get('pain_point', '')}
+- Address this pain point: {pain_point}
 - NEVER write fake testimonials — if no real reviews, skip quotes entirely
 
 ━━━ OUTPUT ━━━
@@ -392,17 +421,18 @@ Start with <!DOCTYPE html>"""
     return site_dir
 
 
-def generate_email(intel: dict, grade: dict, prospect_id: str) -> dict:
+def generate_email(intel: dict, grade: dict, prospect_id: str, r6: Optional[dict] = None) -> dict:
     """Generate cold outreach email. grade and prospect_id kept for api.py compatibility."""
     preview_url = f"https://joshclifford.github.io/lvrg-previews/{prospect_id}/index.html"
-    
+    pain_point = _pain_point_context(intel, r6)
+
     email_prompt = f"""Write a cold outreach email from {SENDER_NAME} at {SENDER_AGENCY} to the owner/decision maker of {intel['business_name']}.
 
 BUSINESS INTEL:
 - Business: {intel['business_name']}
 - Location: {intel['location']}
 - Type: {intel.get('business_type', 'business')}
-- Pain point: {intel.get('pain_point', '')}
+- Pain point: {pain_point}
 - What's missing: {intel.get('missing', '')}
 - Their CTA: {intel.get('cta_angle', '')}
 
