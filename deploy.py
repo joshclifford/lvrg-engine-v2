@@ -13,12 +13,19 @@ import urllib.error
 from config import GITHUB_USER, GITHUB_REPO, PREVIEW_BASE_URL
 
 # GitHub Pages builds asynchronously, so the URL is not live the moment the commit
-# ref moves — that gap is what put 404s in front of prospects. We poll before
-# returning, but the window has to fit the caller's budget: leadscraper aborts the
-# whole engine call at 135s (build-smart-site ENGINE_TIMEOUT_MS) and a build already
-# takes 85-95s. Raise this only if that budget goes up too.
-PAGES_VERIFY_TIMEOUT = int(os.environ.get("PAGES_VERIFY_TIMEOUT", "40"))
-PAGES_VERIFY_INTERVAL = 4
+# ref moves — that gap is what put 404s in front of prospects.
+#
+# The window is small on purpose. leadscraper aborts the engine call at 135s, and
+# that ceiling cannot be raised: it is headroom under Supabase's 150s edge-function
+# lifetime, which the background task shares. Generation alone takes ~82s, so this
+# poll gets the tail of the budget, not a generous slice of it.
+#
+# A short poll is still the right call because it is not the only safety net —
+# leadscraper's client-side readiness probe covers the first 60s after a build.
+# This catches the common case (Pages usually serves within seconds); anything
+# slower is reported as UNVERIFIED and left to the probe.
+PAGES_VERIFY_TIMEOUT = int(os.environ.get("PAGES_VERIFY_TIMEOUT", "15"))
+PAGES_VERIFY_INTERVAL = 3
 
 
 def _api(method: str, path: str, body: dict = None) -> dict:

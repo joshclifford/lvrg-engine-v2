@@ -82,6 +82,13 @@ class BuildRequest(BaseModel):
     offer: str = "Smart Site"
     cta: str = "Book a Call"
     notes: str = ""
+    # Known facts the caller already holds. leadscraper enriches every lead via
+    # Apify + Hunter, so it has the phone, email, address, socials and a real
+    # Google rating before the engine starts. Re-deriving them from a scrape is
+    # strictly worse: the site often doesn't list them, and we published pages
+    # with a blank contact section for businesses whose number we'd had on file
+    # for days. Anything passed here wins over anything scraped.
+    known: dict = {}
     # Optional R6 audit pillar breakdown from the caller (leadscraper's
     # build-smart-site edge fn). None for any caller that doesn't send one
     # (MCP tool, smoke_test.sh, direct API calls) — generator.py falls back
@@ -100,7 +107,43 @@ def sse(type: str, **kwargs) -> str:
     return f"data: {json.dumps({'type': type, **kwargs})}\n\n"
 
 
-async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", r6: Optional[dict] = None) -> AsyncGenerator[str, None]:
+def _merge_known(intel: dict, known: dict) -> list:
+    """Overlay caller-supplied facts onto scraped intel. Returns what was used.
+
+    Only non-empty values overwrite, so a caller sending partial data can't
+    blank out something the scrape did find.
+    """
+    used = []
+
+    for field in ("phone", "email", "hours", "owner_name", "neighborhood"):
+        value = (known.get(field) or "").strip() if isinstance(known.get(field), str) else known.get(field)
+        if value:
+            intel[field] = value
+            used.append(field)
+
+    # Address is the app's column name; the engine calls it location.
+    location = (known.get("address") or known.get("location") or "")
+    if isinstance(location, str) and location.strip():
+        intel["location"] = location.strip()
+        used.append("location")
+
+    # Real rating from Google Maps. The generator shows it as a stat and is
+    # told never to invent one, so passing it is the only way a page gets stars.
+    if known.get("rating") is not None:
+        intel["rating"] = known["rating"]
+        intel["review_count"] = known.get("review_count")
+        used.append("rating")
+
+    socials = {k: known[k] for k in ("facebook_url", "instagram_url", "linkedin_url")
+               if known.get(k)}
+    if socials:
+        intel["socials"] = socials
+        used.append("socials")
+
+    return used
+
+
+async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None) -> AsyncGenerator[str, None]:
     """Run the full engine pipeline, yielding SSE events."""
 
     loop = asyncio.get_event_loop()
@@ -135,6 +178,12 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         # Prefer Scout-found email/phone over scraped (Scout finds real contact emails)
         if queue_contact.get("email"): intel["email"] = queue_contact["email"]
         if queue_contact.get("phone"): intel["phone"] = queue_contact["phone"]
+
+        # Caller-supplied facts beat anything we scraped — they came from Apify
+        # and Hunter, not from guessing at a page that may not list them.
+        merged = _merge_known(intel, known or {})
+        if merged:
+            yield sse("log", text=f"Using known data from app: {', '.join(merged)}", level="info")
         yield sse("log", text=f"Got intel for {intel['business_name']}", level="success")
         yield sse("intel", data=intel)
 
@@ -243,7 +292,7 @@ async def build(req: BuildRequest):
         raise HTTPException(status_code=400, detail="domain is required")
 
     return StreamingResponse(
-        run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes, req.r6),
+        run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes, req.known, req.r6),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

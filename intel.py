@@ -1,14 +1,23 @@
 """
 LVRG Lead Magnet Engine V2 — Prospect Intel Gatherer
-Fetches site content via requests + Claude extraction.
-V2 additions: Yelp photo URLs, press/media mentions via Firecrawl search.
+Scrapes the prospect's own site via Firecrawl, extracts structured intel with
+Claude, and pulls real photos off their page.
+
+Photos used to come from scraping Yelp's HTML. Yelp returns 403 to datacenter
+IPs, the failure was silent, and the generator quietly fell back to "gradients
+only" — which is why V2 output looked identical to V1. Their own site is a
+better source anyway: real photos of that business, no third party to be
+blocked by, and nothing to misattribute.
 """
 
 import requests
 import json
 import os
+import time
 import re
 import anthropic
+from html import unescape as _unescape
+from urllib.parse import urljoin
 from config import INTEL_DIR
 
 def _get_client():
@@ -20,111 +29,270 @@ HEADERS = {
 }
 
 FIRECRAWL_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
+FIRECRAWL_SCRAPE = "https://api.firecrawl.dev/v2/scrape"
+FIRECRAWL_SEARCH = "https://api.firecrawl.dev/v2/search"
+
+# Filenames/paths that are almost never a photo of the business.
+_JUNK_IMAGE = re.compile(
+    r"(logo|icon|favicon|sprite|badge|avatar|placeholder|pixel|tracking|"
+    r"spinner|loader|arrow|chevron|bullet|divider|pattern|1x1|blank)",
+    re.I,
+)
+_PHOTO_EXT = re.compile(r"\.(jpe?g|png|webp)(\?|$)", re.I)
+
+# Campaign artwork. Real on the page, wrong on a rebuilt site — a June giveaway
+# banner as the hero in August reads as stale.
+_PROMO_IMAGE = re.compile(
+    r"(giveaway|promo|coupon|discount|webinar|ebook|tipsheet|whitepaper|"
+    r"popup|pop-up|banner|cta-|-cta|newsletter|signup)",
+    re.I,
+)
+
+# WordPress writes crops as name-1024x839.png next to the full-size name.png.
+_WP_THUMB = re.compile(r"-(\d{2,4})x(\d{2,4})(\.(?:jpe?g|png|webp))$", re.I)
 
 
-def fetch_site_content(domain: str) -> str:
-    """Fetch raw HTML/text from a site."""
+def _photo_score(url: str) -> int:
+    """Rank candidates so the hero is a photo, not a promo banner.
+
+    Ordering used to be document order, which put AccuLynx's "GIVEAWAY" graphic
+    ahead of their product screenshot.
+    """
+    bare = url.split("?")[0]
+    score = 0
+
+    # Photographs are overwhelmingly JPEG/WebP. Transparent PNGs are logos,
+    # cut-outs and composites — they render badly behind object-fit: cover.
+    if re.search(r"\.(jpe?g|webp)$", bare, re.I):
+        score += 3
+
+    if _PROMO_IMAGE.search(bare):
+        score -= 5
+
+    m = _WP_THUMB.search(bare)
+    if m:
+        width = int(m.group(1))
+        score += 3 if width >= 800 else 1 if width >= 400 else -2
+    else:
+        score += 2  # no crop suffix — likely already the original
+
+    return score
+
+
+# A crop at least this wide is already fine for a hero — upgrading it just
+# makes the page heavier. Only genuinely small crops are worth replacing.
+_UPGRADE_BELOW_WIDTH = 800
+# Refuse originals big enough to hurt page load. AccuLynx's full-size homepage
+# graphics are ~1.5 MB each; four of those is a 6 MB page.
+_MAX_UPGRADE_BYTES = 900_000
+
+
+def _full_size(url: str) -> str:
+    """Trade a small WordPress crop for the original, when that's an improvement.
+
+    Two guards, both learned from real pages: a guessed original may not exist
+    (publishing a broken image is worse than a soft one), and the original may
+    be far too heavy to put on a page.
+    """
+    bare, _, query = url.partition("?")
+    m = _WP_THUMB.search(bare)
+    if not m or int(m.group(1)) >= _UPGRADE_BELOW_WIDTH:
+        return url
+
+    candidate = _WP_THUMB.sub(r"\3", bare)
+    try:
+        resp = requests.head(candidate, headers=HEADERS, timeout=4, allow_redirects=True)
+        if resp.status_code != 200:
+            return url
+        if not resp.headers.get("Content-Type", "").startswith("image/"):
+            return url
+        length = resp.headers.get("Content-Length")
+        if length and length.isdigit() and int(length) > _MAX_UPGRADE_BYTES:
+            return url
+        return candidate + (("?" + query) if query else "")
+    except Exception:
+        return url
+
+
+def fetch_site_content(domain: str) -> dict:
+    """Scrape the prospect's site. Returns {"text": str, "html": str}.
+
+    Firecrawl first — it renders JS and returns clean markdown, and it is not
+    truncated (V1 cut at 4,000 chars, so only half a homepage reached the model).
+    Falls back to a direct fetch so a Firecrawl outage degrades instead of
+    failing the build outright.
+    """
     url = f"https://{domain}" if not domain.startswith("http") else domain
+
+    if FIRECRAWL_KEY:
+        try:
+            resp = requests.post(
+                FIRECRAWL_SCRAPE,
+                headers={"Authorization": f"Bearer {FIRECRAWL_KEY}",
+                         "Content-Type": "application/json"},
+                json={"url": url, "formats": ["markdown", "html"], "onlyMainContent": False},
+                # Sized to the caller's 135s budget, not to Firecrawl's patience.
+                timeout=25,
+            )
+            if resp.status_code == 200:
+                data = resp.json().get("data", {}) or {}
+                text = (data.get("markdown") or "").strip()
+                html = data.get("html") or ""
+                if text:
+                    print(f"  [intel] Firecrawl scrape OK — {len(text)} chars")
+                    return {"text": text, "html": html}
+                print("  [intel] Firecrawl returned no markdown — falling back")
+            else:
+                print(f"  [intel] Firecrawl scrape failed: {resp.status_code} — falling back")
+        except Exception as e:
+            print(f"  [intel] Firecrawl scrape error: {e} — falling back")
+    else:
+        print("  [intel] FIRECRAWL_API_KEY not set — using direct fetch")
+
+    # Fallback: direct fetch, tags stripped. No 4,000-char cap here either.
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
-        text = resp.text
-        text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL)
+        html = resp.text
+        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
         text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
         text = re.sub(r'<[^>]+>', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
-        return text[:4000]
+        print(f"  [intel] Direct fetch OK — {len(text)} chars")
+        return {"text": text, "html": html}
     except Exception as e:
         print(f"  [intel] Fetch failed: {e}")
-        return ""
+        return {"text": "", "html": ""}
 
 
-def fetch_yelp_data(business_name: str, location: str) -> dict:
-    """Fetch Yelp rating, review count, top reviews, and photo URLs."""
+def extract_photos(html: str, base_url: str, limit: int = 6) -> list:
+    """Pull real photos of the business off their own page.
+
+    Prefers the og:image (almost always the hero shot), then <img> sources,
+    skipping the logos, icons and tracking pixels that make up most <img> tags
+    on a small business site.
+    """
+    if not html:
+        return []
+
+    candidates = []
+
+    og = re.search(
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+        html, re.I,
+    )
+    if og:
+        candidates.append(og.group(1))
+
+    # src, and the first URL of any srcset (largest is usually last, but the
+    # first is always well-formed — good enough for a hero candidate).
+    candidates += re.findall(r'<img[^>]+src=["\']([^"\']+)', html, re.I)
+    candidates += [s.split()[0] for s in
+                   re.findall(r'<img[^>]+srcset=["\']([^"\',]+)', html, re.I) if s.strip()]
+
+    seen, kept = set(), []
+    for position, raw in enumerate(candidates):
+        # Unescape first: HTML-encoded query strings (?v=1&amp;width=700) are
+        # common on Shopify/WordPress and produce a dead URL if left as-is.
+        src = _unescape(raw.strip())
+        if not src or src.startswith("data:"):
+            continue
+        absolute = urljoin(base_url, src)
+        if not absolute.startswith(("http://", "https://")):
+            continue
+        if not _PHOTO_EXT.search(absolute):
+            continue          # skips .svg, .gif and extensionless endpoints
+        if _JUNK_IMAGE.search(absolute):
+            continue
+        key = absolute.split("?")[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append((absolute, position))
+
+    # Rank before truncating. Document order alone puts whatever the site
+    # happens to render first — often a promo banner — into the hero slot.
+    # Position stays as the tie-breaker so equal-quality images keep page order.
+    kept.sort(key=lambda pair: (-_photo_score(pair[0]), pair[1]))
+
+    return [_full_size(url) for url, _ in kept[:limit]]
+
+
+def _mentions_business(sentence: str, business_name: str) -> bool:
+    """Does this sentence actually name the business?
+
+    The old check matched on the FIRST WORD of the name, so "The Little Door"
+    matched any sentence containing "the". Require the full name, or a
+    distinctive word from it (4+ chars, not a stopword).
+    """
+    s = sentence.lower()
+    name = business_name.lower().strip()
+    if name and name in s:
+        return True
+    stop = {"the", "and", "for", "cafe", "shop", "inc", "llc", "co", "company", "group"}
+    tokens = [w for w in re.findall(r"[a-z0-9]+", name) if len(w) >= 4 and w not in stop]
+    return any(t in s for t in tokens)
+
+
+def fetch_press_mentions(business_name: str, location: str = "") -> list:
+    """Search for press/media mentions via Firecrawl search.
+
+    Was pinned to /v1/search (deprecated, returns 500 for a valid key) and to
+    a hardcoded San Diego + San Diego-only publication list, which was wrong
+    for every prospect outside that city.
+    """
+    if not FIRECRAWL_KEY:
+        print("  [intel] FIRECRAWL_API_KEY not set — skipping press search")
+        return []
+
     try:
-        # Search Yelp for the business
-        search_term = f"{business_name} {location}".replace(" ", "+")
-        yelp_url = f"https://www.yelp.com/search?find_desc={search_term}&find_loc=San+Diego%2C+CA"
-        
-        resp = requests.get(yelp_url, headers=HEADERS, timeout=15)
-        html = resp.text
-        
-        # Extract JSON data embedded in Yelp's page
-        match = re.search(r'"businessesFound":\{"businesses":\[(\{.+?\})\]', html)
-        
-        # Try to find photo CDN URLs — Yelp uses yelpcdn.com
-        photo_urls = re.findall(r'https://s3-media\d*\.fl\.yelpcdn\.com/bphoto/[^"\']+(?:o\.jpg|l\.jpg|ms\.jpg|348s\.jpg)', html)
-        # Deduplicate and grab originals (o.jpg) preferably
-        seen = set()
-        clean_photos = []
-        for p in photo_urls:
-            # Normalize to original size
-            base = re.sub(r'/(o|l|ms|348s|ls|ls6|300s|250s|60s)\.jpg$', '/o.jpg', p)
-            if base not in seen:
-                seen.add(base)
-                clean_photos.append(base)
-        
-        # Extract rating
-        rating_match = re.search(r'"rating":(\d+\.?\d*)', html)
-        rating = float(rating_match.group(1)) if rating_match else None
-        
-        # Extract review count
-        review_match = re.search(r'"reviewCount":(\d+)', html)
-        review_count = int(review_match.group(1)) if review_match else None
-        
-        # Extract top review snippets
-        review_snippets = re.findall(r'"text":"([^"]{40,200})"', html)
-        top_reviews = list(dict.fromkeys(review_snippets))[:5]  # dedupe, keep 5
-        
-        result = {
-            "rating": rating,
-            "review_count": review_count,
-            "top_reviews": top_reviews,
-            "photo_urls": clean_photos[:6],  # top 6 photos
-        }
-        
-        print(f"  [intel] Yelp: {rating}★ ({review_count} reviews), {len(clean_photos)} photos, {len(top_reviews)} review snippets")
-        return result
-        
-    except Exception as e:
-        print(f"  [intel] Yelp fetch failed: {e}")
-        return {}
+        where = f" {location}" if location else ""
+        query = f'"{business_name}"{where} review OR feature OR profile'
 
-
-def fetch_press_mentions(business_name: str) -> list:
-    """Search for press/media mentions via Firecrawl search."""
-    try:
-        query = f'"{business_name}" San Diego site:eater.com OR site:sandiegomagazine.com OR site:sdcitybeat.com OR site:timeout.com OR site:thrillist.com OR site:zagat.com OR site:infatuation.com'
-        
         resp = requests.post(
-            "https://api.firecrawl.dev/v1/search",
-            headers={"Authorization": f"Bearer {FIRECRAWL_KEY}", "Content-Type": "application/json"},
-            json={"query": query, "limit": 5, "scrapeOptions": {"formats": ["markdown"]}},
-            timeout=20
+            FIRECRAWL_SEARCH,
+            headers={"Authorization": f"Bearer {FIRECRAWL_KEY}",
+                     "Content-Type": "application/json"},
+            json={
+                "query": query,
+                "limit": 5,
+                "country": "US",
+                "ignoreInvalidURLs": True,
+                "scrapeOptions": {"formats": ["markdown"]},
+            },
+            timeout=15,  # press is a nice-to-have; never let it eat the build budget
         )
-        
+
         if resp.status_code != 200:
             print(f"  [intel] Press search failed: {resp.status_code}")
             return []
-        
-        results = resp.json().get("data", [])
+
+        payload = resp.json().get("data", {})
+        # v2 nests results under data.web; v1 returned a bare list.
+        results = payload.get("web", []) if isinstance(payload, dict) else payload
+
+        own_domain = business_name.lower().replace(" ", "")
         mentions = []
         for r in results:
             title = r.get("title", "")
             url = r.get("url", "")
-            # Try to pull a quote from the markdown content
-            content = r.get("markdown", r.get("description", ""))
-            # Find a sentence mentioning the business
+            if not (title and url):
+                continue
+            source = re.sub(r'https?://(www\.)?', '', url).split('/')[0]
+            if own_domain and own_domain in source.replace("-", "").replace(".", ""):
+                continue  # their own site isn't press coverage
+
+            content = r.get("markdown") or r.get("description") or ""
             sentences = re.split(r'(?<=[.!?])\s+', content)
-            relevant = [s.strip() for s in sentences if business_name.lower().split()[0].lower() in s.lower() and len(s) > 30]
+            relevant = [s.strip() for s in sentences
+                        if len(s) > 30 and _mentions_business(s, business_name)]
             quote = relevant[0] if relevant else ""
-            
-            if title and url:
-                source = re.sub(r'https?://(www\.)?', '', url).split('/')[0]
-                mentions.append({"source": source, "title": title, "url": url, "quote": quote[:200]})
-        
+
+            mentions.append({"source": source, "title": title,
+                             "url": url, "quote": quote[:200]})
+
         print(f"  [intel] Press: {len(mentions)} mentions found")
         return mentions
-        
+
     except Exception as e:
         print(f"  [intel] Press fetch failed: {e}")
         return []
@@ -182,16 +350,25 @@ Return ONLY valid JSON, no markdown, no explanation."""
         return {}
 
 
+# The intel stage's share of the caller's 135s build budget. Site generation
+# needs ~82-95s of that and cannot be shortened, so once intel has spent this
+# long the optional enrichment is skipped rather than pushing the whole build
+# past the deadline. A page with no press quotes beats a build that times out.
+INTEL_BUDGET_SECONDS = int(os.environ.get("INTEL_BUDGET_SECONDS", "30"))
+
+
 def scrape_site(domain: str) -> dict:
     """Full intel gather for a prospect domain."""
-    
+
+    started = time.monotonic()
     domain = domain.strip().lower()
     domain = domain.replace("https://", "").replace("http://", "")
     domain = domain.split("/")[0].split("?")[0].strip()
     url = f"https://{domain}"
     print(f"  [intel] Fetching {url}...")
     
-    raw_text = fetch_site_content(domain)
+    scraped = fetch_site_content(domain)
+    raw_text, raw_html = scraped["text"], scraped["html"]
 
     # Never build from an unread site. Without this the model invents the whole
     # business from the domain string and we publish a fiction under a real
@@ -206,15 +383,23 @@ def scrape_site(domain: str) -> dict:
     extracted = extract_intel_with_claude(domain, raw_text)
 
     business_name = extracted.get("business_name") or domain.split(".")[0].replace("-", " ").title()
-    location = extracted.get("location", "San Diego, CA")
+    location = extracted.get("location", "")
 
-    # V2: Fetch Yelp data (photos + reviews)
-    print(f"  [intel] Fetching Yelp data...")
-    yelp = fetch_yelp_data(business_name, location)
+    # Photos come from the prospect's own page now. Yelp 403s datacenter IPs,
+    # so the old path returned nothing on every single build.
+    photos = extract_photos(raw_html, url)
+    print(f"  [intel] Photos: {len(photos)} found on their site")
 
-    # V2: Fetch press mentions
-    print(f"  [intel] Searching for press mentions...")
-    press = fetch_press_mentions(business_name)
+    # Press is the one genuinely optional stage — skip it if the scrape and the
+    # extraction already ate the intel budget.
+    elapsed = time.monotonic() - started
+    if elapsed > INTEL_BUDGET_SECONDS:
+        print(f"  [intel] Skipping press search — intel already took {elapsed:.0f}s "
+              f"of its {INTEL_BUDGET_SECONDS}s budget")
+        press = []
+    else:
+        print(f"  [intel] Searching for press mentions...")
+        press = fetch_press_mentions(business_name, location)
 
     intel = {
         "domain": domain,
@@ -239,13 +424,22 @@ def scrape_site(domain: str) -> dict:
         "cta_angle": extracted.get("cta_angle", "Get in Touch"),
         "owner_name": extracted.get("owner_name", ""),
         "neighborhood": extracted.get("neighborhood", ""),
-        "raw_text": raw_text[:1000],
+        # Sample of the page passed to the generator prompt. The full text
+        # goes to the intel extraction above; this is the slice the site
+        # writer sees for voice and detail. Was 1000 when the scrape itself
+        # was capped at 4000 — there is room for more now.
+        "raw_text": raw_text[:6000],
         # V2 enrichment
-        "yelp_rating": yelp.get("rating"),
-        "yelp_review_count": yelp.get("review_count"),
-        "yelp_reviews": yelp.get("top_reviews", []),
-        "yelp_photos": yelp.get("photo_urls", []),
+        "photos": photos,
         "press_mentions": press,
+        # Rating and reviews are real data the app already holds (Google Maps via
+        # Apify). api.py merges them in from engine_queue when present. We no
+        # longer scrape them — the old Yelp regex matched any JSON field named
+        # "text" and handed arbitrary strings to the model as verbatim customer
+        # testimonials, which is worse than inventing one.
+        "rating": None,
+        "review_count": None,
+        "reviews": [],
     }
     
     print(f"  [intel] ✓ {intel['business_name']} — {intel['business_type']} — {intel['location']}")
