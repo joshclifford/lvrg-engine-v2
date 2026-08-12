@@ -252,23 +252,40 @@ Only use a photo if it makes sense in context — don't force it."""
     else:
         photo_block = "PHOTOS: No real photos available. Use CSS gradients and brand colors only — no placeholder images."
 
-    # Build reviews block. Rating/reviews are real data passed in from the app
-    # (Google Maps via Apify), never scraped. If we don't have them, say nothing
-    # rather than inventing social proof.
-    reviews = intel.get("reviews", [])
+    # Build reviews block. Rating and review count are real data passed in from
+    # the app (Google Maps via Apify), never scraped.
+    #
+    # There is deliberately NO branch that emits review QUOTES. `intel["reviews"]`
+    # is set to [] by scrape_site and nothing populates it — _merge_known has no
+    # `reviews` key and leadscraper never sends one — so the branch that used to
+    # live here was unreachable, and it still carried the instruction "use these
+    # verbatim as testimonials". That instruction came from the Yelp scrape,
+    # whose regex matched any JSON field named "text" anywhere on the page (ad
+    # copy, category blurbs, other businesses' content) and handed the results
+    # to the model as real customer quotes — worse than inventing one.
+    # Do not add a quotes branch back without a verified review source behind it.
+    #
+    # Rating and count arrive independently: Apify returns plenty of listings
+    # with one and not the other, and interpolating a missing count publishes the
+    # literal string "from None reviews".
     rating = intel.get("rating")
     review_count = intel.get("review_count")
-    has_rating = rating is not None
-    has_review_count = review_count is not None
-    rating_stat = f"{rating}★ ({review_count} reviews)" if has_review_count else f"{rating}★"
 
-    if reviews:
-        reviews_block = f"""REAL CUSTOMER REVIEWS (use these verbatim as testimonials — do not make up quotes):
-{f'Rating: {rating_stat}{chr(10)}' if has_rating else ''}{chr(10).join(f'  "{r}"' for r in reviews[:3])}"""
-    elif has_rating:
+    # Resolved against 1b89852 (Hamza, same bug, same day). That commit fixed the
+    # None rendering but KEPT the `if reviews:` branch — which is unreachable
+    # (nothing populates intel["reviews"]) and still carried "use these verbatim
+    # as testimonials". Deleting it is the point of this change, so the deletion
+    # wins and rating_stat goes with it.
+    if rating is not None and review_count is not None:
         reviews_block = (
-            f"SOCIAL PROOF: This business is rated {rating_stat}. "
+            f"SOCIAL PROOF: This business is rated {rating}★ from {review_count} reviews. "
             f"Use that as a stat. You have NO review text — do NOT write testimonial quotes."
+        )
+    elif rating is not None:
+        reviews_block = (
+            f"SOCIAL PROOF: This business is rated {rating}★. Use that as a stat. "
+            f"You were NOT given a review count — do not state one. "
+            f"You have NO review text — do NOT write testimonial quotes."
         )
     else:
         reviews_block = (
