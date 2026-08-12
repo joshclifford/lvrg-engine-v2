@@ -549,11 +549,15 @@ def test_the_slot_is_returned_after_a_failed_render(driver, monkeypatch):
 
 
 def test_timeouts_are_bounded_against_the_build_deadline():
-    """leadscraper aborts the engine call at 135s and generation needs ~82-95s.
+    """leadscraper aborts the engine call at 140s and generation needs ~82-95s.
 
     Firecrawl 25s + Playwright 20s + fetch 15s only fits because
     SCRAPE_BUDGET_SECONDS caps the sum; without that the tiers add up to 60s and
     the build times out — the exact failure a fallback chain exists to prevent.
+
+    Held against 135 rather than the current 140 (build-smart-site
+    ENGINE_TIMEOUT_MS, raised 12 Aug) on purpose: the extra 5s is headroom, not
+    budget to spend. Most comments in intel.py still quote the old 135.
     """
     assert intel.PLAYWRIGHT_TIMEOUT_MS <= 25_000
     assert intel.SCRAPE_BUDGET_SECONDS <= 40

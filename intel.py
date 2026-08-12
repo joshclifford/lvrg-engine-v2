@@ -64,8 +64,10 @@ PLAYWRIGHT_TIMEOUT_MS = int(os.environ.get("PLAYWRIGHT_TIMEOUT_MS", "20000"))
 
 # Whole-scrape ceiling, across every tier. Without it the tiers ADD UP:
 # Firecrawl 25s + Playwright 20s + fetch 15s = 60s, and generation alone needs
-# ~82-95s of the caller's 135s. That combination times out the build — the one
-# outcome a fallback chain is supposed to prevent.
+# ~82-95s of the caller's 140s (build-smart-site ENGINE_TIMEOUT_MS, raised from
+# 135s on 12 Aug — most of the older comments in this file still say 135). That
+# combination times out the build — the one outcome a fallback chain is supposed
+# to prevent.
 #
 # 35 is picked so that adding a whole browser to the chain does not cost the
 # build a single second of worst case. Before this change the worst path was
