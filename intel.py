@@ -32,10 +32,30 @@ FIRECRAWL_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
 FIRECRAWL_SCRAPE = "https://api.firecrawl.dev/v2/scrape"
 FIRECRAWL_SEARCH = "https://api.firecrawl.dev/v2/search"
 
+# A page yielding less text than this was not meaningfully read, whatever the
+# status code said. The guard this backs used to test `if not raw_text`, which
+# only catches a BLANK response — so an HTTP 401 body ("Private Site", 19 chars)
+# and a parked "Coming Soon!" page (12 chars) both passed as prospect content
+# and the model invented the whole business from them. Real homepages clear this
+# by two orders of magnitude; the smallest healthy site measured was 16,301.
+MIN_SITE_TEXT_CHARS = int(os.environ.get("MIN_SITE_TEXT_CHARS", "200"))
+
 # Filenames/paths that are almost never a photo of the business.
+#
+# Token-bounded, not a bare substring. Unanchored, these words also matched
+# inside ordinary ones — /images/iconic-dental.jpg lost to "icon",
+# /photos/badger-team.jpg to "badge", /media/arrowhead-plaza.jpg to "arrow" and
+# /gallery/blankenship.jpg to "blank". Stripping the HOST fixed the domain-level
+# case (badgerroofing.com); this fixes the same defect one level down, in the
+# path, where it was still silently costing prospects their photos.
+#
+# `s?` keeps the plurals working: /logos/hero.jpg and /badges/x.png are still
+# junk, while /iconic-…, /badger-… and /arrowhead-… are not.
 _JUNK_IMAGE = re.compile(
+    r"(?<![a-z0-9])"
     r"(logo|icon|favicon|sprite|badge|avatar|placeholder|pixel|tracking|"
-    r"spinner|loader|arrow|chevron|bullet|divider|pattern|1x1|blank)",
+    r"spinner|loader|arrow|chevron|bullet|divider|pattern|1x1|blank)"
+    r"s?(?![a-z0-9])",
     re.I,
 )
 _PHOTO_EXT = re.compile(r"\.(jpe?g|png|webp)(\?|$)", re.I)
@@ -153,8 +173,33 @@ def _full_size(url: str) -> str:
         return url
 
 
+def _fetch_html_only(url: str) -> tuple:
+    """(html, final_url) for photo extraction. Never raises.
+
+    Firecrawl sometimes returns good markdown and an EMPTY `html` field, and
+    extract_photos reads html — so the build shipped with zero photos, which
+    looks identical to a site that genuinely has none. One cheap GET backfills
+    it; the text is already good, so any failure here is non-fatal.
+    """
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            return resp.text, resp.url
+    except Exception as e:
+        print(f"  [intel] html backfill failed: {e}")
+    return "", url
+
+
 def fetch_site_content(domain: str) -> dict:
-    """Scrape the prospect's site. Returns {"text": str, "html": str}.
+    """Scrape the prospect's site.
+
+    Returns {"text": str, "html": str, "final_url": str}.
+
+    `final_url` is the URL the content actually came from, which is NOT always
+    the one we asked for — a prospect on olddomain.com may redirect to
+    newdomain.com. extract_photos resolves relative `src` values against it, so
+    dropping it (as this used to) pointed every relative image path at the
+    pre-redirect host, where it 404s.
 
     Firecrawl first — it renders JS and returns clean markdown, and it is not
     truncated (V1 cut at 4,000 chars, so only half a homepage reached the model).
@@ -177,10 +222,21 @@ def fetch_site_content(domain: str) -> dict:
                 data = resp.json().get("data", {}) or {}
                 text = (data.get("markdown") or "").strip()
                 html = data.get("html") or ""
-                if text:
+                # Length, not truthiness: Firecrawl happily renders a login wall
+                # or a parked page and returns it as markdown. A stub here used
+                # to short-circuit the direct-fetch fallback and be treated as
+                # the real site.
+                if len(text) >= MIN_SITE_TEXT_CHARS:
+                    final_url = (data.get("metadata") or {}).get("sourceURL") or url
+                    if not html:
+                        print("  [intel] Firecrawl returned no html — "
+                              "backfilling for photo extraction")
+                        html, final_url = _fetch_html_only(url)
+                        final_url = final_url or url
                     print(f"  [intel] Firecrawl scrape OK — {len(text)} chars")
-                    return {"text": text, "html": html}
-                print("  [intel] Firecrawl returned no markdown — falling back")
+                    return {"text": text, "html": html, "final_url": final_url}
+                print(f"  [intel] Firecrawl returned {len(text)} chars "
+                      f"(under {MIN_SITE_TEXT_CHARS}) — falling back")
             else:
                 print(f"  [intel] Firecrawl scrape failed: {resp.status_code} — falling back")
         except Exception as e:
@@ -191,16 +247,25 @@ def fetch_site_content(domain: str) -> dict:
     # Fallback: direct fetch, tags stripped. No 4,000-char cap here either.
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
+        # requests does not raise on 4xx/5xx and an error page still carries a
+        # body, so without this a 401 login wall or a 404 became "the prospect's
+        # website" — and the log still said "OK". `_full_size` below has always
+        # checked this; this path never did.
+        if resp.status_code != 200:
+            print(f"  [intel] Direct fetch failed: HTTP {resp.status_code}")
+            return {"text": "", "html": "", "final_url": url}
         html = resp.text
         text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
         text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
         text = re.sub(r'<[^>]+>', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
         print(f"  [intel] Direct fetch OK — {len(text)} chars")
-        return {"text": text, "html": html}
+        # resp.url, not url: requests followed the redirects, and this is where
+        # the html actually came from.
+        return {"text": text, "html": html, "final_url": resp.url or url}
     except Exception as e:
         print(f"  [intel] Fetch failed: {e}")
-        return {"text": "", "html": ""}
+        return {"text": "", "html": "", "final_url": url}
 
 
 def extract_photos(html: str, base_url: str, limit: int = 6) -> list:
@@ -444,10 +509,17 @@ def scrape_site(domain: str) -> dict:
     # Never build from an unread site. Without this the model invents the whole
     # business from the domain string and we publish a fiction under a real
     # company's name — see familydentalcare.com, 2026-08-04.
-    if not raw_text:
+    #
+    # Length, not emptiness. The original `if not raw_text` only caught a blank
+    # response, so affiliatesolar.com (HTTP 401 -> 'Private Site &nbsp;', 19
+    # chars) and solaricon.tech ('Coming Soon!', 12) sailed through and reached
+    # the model as though they were real homepages — the same fabricated-site
+    # outcome this guard was written to stop, just via a different door.
+    if len(raw_text) < MIN_SITE_TEXT_CHARS:
         raise ValueError(
-            f"Could not read {url} — unreachable or returned nothing. "
-            f"Refusing to build a site for a business we never read."
+            f"Could not read {url} — got {len(raw_text)} chars of text, need at "
+            f"least {MIN_SITE_TEXT_CHARS}. Refusing to build a site for a "
+            f"business we never read."
         )
 
     print(f"  [intel] Extracting structured intel with Claude...")
@@ -466,7 +538,10 @@ def scrape_site(domain: str) -> dict:
 
     # Photos come from the prospect's own page now. Yelp 403s datacenter IPs,
     # so the old path returned nothing on every single build.
-    photos = extract_photos(raw_html, url)
+    # Resolve relative image paths against where the html ACTUALLY came from.
+    # Using `url` here sent every relative src to the pre-redirect host, so a
+    # prospect who moved domains lost all their photos to 404s.
+    photos = extract_photos(raw_html, scraped.get("final_url") or url)
     print(f"  [intel] Photos: {len(photos)} found on their site")
 
     # Press is the one genuinely optional stage — skip it if the scrape and the

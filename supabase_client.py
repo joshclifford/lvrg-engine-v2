@@ -49,6 +49,22 @@ def upsert_lead(
 ) -> dict | None:
     """Save or update a lead in Supabase. Returns the lead record."""
 
+    # The domain is stored RAW, deliberately.
+    #
+    # Canonicalising here (so `https://www.acme.com/` lands as `acme.com`) would
+    # fix lm-tool's same-business comparison at the source — but `leads.domain`
+    # is JOINED to `engine_queue.domain`, which is written elsewhere and stays
+    # raw:
+    #   lm-tool/app/dashboard/lead-magnets/page.tsx  `domain=in.(...)`
+    #   api.py:167                                   `domain=eq.{domain}`
+    # Canonicalising one side alone silently breaks that lookup and the Lead
+    # Magnets page loses its subject lines — a worse bug than the one it fixes.
+    # Both tables have to migrate together; that is a scheduled change, not a
+    # side effect of a write.
+    #
+    # lm-tool normalises on READ instead — `normalizeDomain` in lib/leads.ts —
+    # which costs nothing and touches no stored value.
+
     lead = {
         "domain": domain,
         "company_name": intel.get("business_name"),
@@ -113,12 +129,22 @@ def update_engine_queue_result(domain: str, preview_url: str, email_data: dict):
 
 def update_lead_status(domain: str, status: str, extra: dict = None):
     """Update a lead's status by domain."""
+    import urllib.parse
     body = {"status": status}
     if status == "sent":
         body["sent_at"] = "now()"
     if extra:
         body.update(extra)
-    result = _request("PATCH", f"leads?domain=eq.{domain}", body)
+    # Matches on the RAW domain, the same form upsert_lead stored. See the note
+    # there: canonicalising either one alone puts this table out of step with
+    # engine_queue.
+    # Encode, exactly as update_engine_queue_result above already does. A domain
+    # carrying a query string puts a raw `&` into the PostgREST query string,
+    # which starts a NEW parameter and silently drops the filter — the PATCH
+    # then matches the wrong rows, or none, and returns no error. The lead's
+    # status never advances and the outreach can be sent twice.
+    encoded_domain = urllib.parse.quote(domain, safe='')
+    result = _request("PATCH", f"leads?domain=eq.{encoded_domain}", body)
     if result:
         print(f"  [supabase] ✓ Status updated: {domain} → {status}")
     return result

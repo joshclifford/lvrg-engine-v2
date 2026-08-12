@@ -115,6 +115,32 @@ def _pain_point_context(intel: dict, r6: Optional[dict]) -> str:
     return " ".join(parts)
 
 
+def _as_count(value) -> int | None:
+    """A review count as an int, or None if it is not usable as one.
+
+    intel["review_count"] is not guaranteed to be a number. It can come from
+    leadscraper (a real int) or from extract_intel_with_claude, whose output is
+    model-generated JSON — so "12", "1,204" and "no reviews" all turn up. A bare
+    `value > 0` raises TypeError on a str in Python 3, which would turn a
+    cosmetic prompt bug into a failed build.
+
+    Anything that will not coerce becomes None, which routes to the no-count
+    branch that tells the model not to state a review count at all. Refusing to
+    guess is the whole point of this block.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        # Numbers first: json.loads gives 12.0 for `12.0`, and routing that
+        # through str() produces "12.0", which int() refuses. OverflowError
+        # covers inf/nan, which int() also refuses but differently.
+        if isinstance(value, (int, float)):
+            return int(value)
+        return int(str(value).replace(",", "").strip())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _build_chat_widget(intel: dict) -> str:
     """Build the chat widget HTML — injected programmatically after Claude generates the site."""
     business_name = intel.get("business_name", "this business")
@@ -269,14 +295,19 @@ Only use a photo if it makes sense in context — don't force it."""
     # with one and not the other, and interpolating a missing count publishes the
     # literal string "from None reviews".
     rating = intel.get("rating")
-    review_count = intel.get("review_count")
+    review_count = _as_count(intel.get("review_count"))
 
     # Resolved against 1b89852 (Hamza, same bug, same day). That commit fixed the
     # None rendering but KEPT the `if reviews:` branch — which is unreachable
     # (nothing populates intel["reviews"]) and still carried "use these verbatim
     # as testimonials". Deleting it is the point of this change, so the deletion
     # wins and rating_stat goes with it.
-    if rating is not None and review_count is not None:
+    # `> 0`, not just `is not None`: a count of exactly zero passed the None
+    # check and published "rated 4.5★ from 0 reviews. Use that as a stat." —
+    # which is not social proof, it is an own goal on the prospect's own
+    # branding. Zero is the absence of reviews, so it takes the no-count branch
+    # below, which tells the model not to state one.
+    if rating is not None and review_count is not None and review_count > 0:
         reviews_block = (
             f"SOCIAL PROOF: This business is rated {rating}★ from {review_count} reviews. "
             f"Use that as a stat. You have NO review text — do NOT write testimonial quotes."
