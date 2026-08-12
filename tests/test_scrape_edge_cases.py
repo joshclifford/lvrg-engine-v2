@@ -115,8 +115,13 @@ def test_e6_cap_is_a_slice_not_a_truncating_parser(monkeypatch):
     import inspect
     src = inspect.getsource(intel.scrape_site)
     assert "raw_text[:EXTRACT_MAX_CHARS]" in src
-    # raw_text comes out of fetch_site_content already tag-stripped
-    assert "re.sub(r'<[^>]+>'" in inspect.getsource(intel.fetch_site_content)
+    # raw_text comes out of fetch_site_content already tag-stripped. The
+    # stripping moved into _text_from_html when the Playwright tier landed, so
+    # both tiers measure MIN_SITE_TEXT_CHARS on the same shape of text — assert
+    # the behaviour rather than where the regex lives.
+    assert "re.sub(r'<[^>]+>'" in inspect.getsource(intel._text_from_html)
+    assert intel._text_from_html("<p>hi <b>there</b></p>") == "hi there"
+    assert "<" not in intel._text_from_html(_big_page(50) + "<div class='x'>")
 
 
 # --------------------------------------------------------------------------
