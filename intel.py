@@ -97,7 +97,12 @@ PLAYWRIGHT_CHROMIUM_PATH = os.environ.get("PLAYWRIGHT_CHROMIUM_PATH", "").strip(
 # simultaneous prospects can OOM the container and take down builds that had
 # nothing to do with rendering. Requests that cannot get a slot fall through to
 # the fetch tier, which is slower-but-worse output rather than no output.
-PLAYWRIGHT_MAX_CONCURRENT = int(os.environ.get("PLAYWRIGHT_MAX_CONCURRENT", "2"))
+#
+# Floored at 1: BoundedSemaphore raises on a negative value, and it is raised at
+# IMPORT time, so `PLAYWRIGHT_MAX_CONCURRENT=-1` would not degrade the scrape —
+# it would stop the engine booting at all. Use PLAYWRIGHT_ENABLED=0 to turn the
+# tier off; this knob only sizes it.
+PLAYWRIGHT_MAX_CONCURRENT = max(1, int(os.environ.get("PLAYWRIGHT_MAX_CONCURRENT", "2")))
 _PLAYWRIGHT_SLOTS = threading.BoundedSemaphore(PLAYWRIGHT_MAX_CONCURRENT)
 
 # Filenames/paths that are almost never a photo of the business.
@@ -318,15 +323,35 @@ def _fetch_html_only(url: str) -> tuple:
 _SCROLL_JS = """
 () => new Promise(resolve => {
   const step = Math.max(400, window.innerHeight * 0.9);
-  let travelled = 0, ticks = 0;
-  const timer = setInterval(() => {
-    window.scrollBy(0, step);
-    travelled += step;
-    ticks += 1;
-    if (travelled >= document.body.scrollHeight || travelled > 30000 || ticks > 40) {
-      clearInterval(timer);
-      window.scrollTo(0, 0);
-      resolve(travelled);
+  let travelled = 0, ticks = 0, timer = null, done = false;
+
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (timer !== null) clearInterval(timer);
+    try { window.scrollTo(0, 0); } catch (e) {}
+    resolve(travelled);
+  };
+
+  // This promise MUST settle. page.evaluate has NO timeout of its own and does
+  // not honour set_default_timeout — measured, an unresolved promise costs
+  // ~30s of driver default, which blows both the render budget and the build
+  // deadline behind it. Every other bound in here is advisory; this one is not.
+  setTimeout(finish, 4000);
+
+  timer = setInterval(() => {
+    try {
+      window.scrollBy(0, step);
+      travelled += step;
+      ticks += 1;
+      // Guarded, and the counters are checked FIRST. Reading
+      // document.body.scrollHeight at the head of an || chain meant a document
+      // with no body threw on every tick, so clearInterval and resolve were
+      // never reached and the bounded checks behind it never got a vote.
+      const height = (document.body && document.body.scrollHeight) || 0;
+      if (ticks > 40 || travelled > 30000 || travelled >= height) finish();
+    } catch (e) {
+      finish();
     }
   }, 60);
 })
@@ -476,6 +501,11 @@ def _render_with_playwright(url: str, budget_seconds: float = None) -> tuple:
             # A page that blocks scripting still gave us a rendered DOM.
             print(f"  [intel] Playwright: lazy-image pass skipped ({e})")
 
+        # Re-arm before the read. set_default_timeout was last set BEFORE the
+        # navigation, so page.content() would otherwise still be working to the
+        # full original budget no matter how much of it goto and the scroll
+        # already spent.
+        page.set_default_timeout(remaining_ms())
         html = page.content()
         text = _text_from_html(html)
         final_url = page.url or url

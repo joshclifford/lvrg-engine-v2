@@ -493,6 +493,43 @@ def test_render_is_given_the_remaining_budget_not_the_full_one(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# The scroll script must always settle
+#
+# page.evaluate has NO timeout of its own and does not honour
+# set_default_timeout. The first version of _SCROLL_JS read
+# `document.body.scrollHeight` at the head of an || chain, so on a document with
+# no body it threw on every tick — clearInterval and resolve were never reached,
+# and the bounded `ticks > 40` check behind it never got a vote. Measured, that
+# page did not settle in over THREE MINUTES. The engine call is killed at 140s,
+# so it took the whole build with it.
+# --------------------------------------------------------------------------
+
+def test_scroll_script_cannot_run_forever():
+    """A hard JS-side deadline, independent of the interval doing its job."""
+    assert "setTimeout(finish" in intel._SCROLL_JS, \
+        "no unconditional deadline — an interval that throws never resolves"
+
+
+def test_scroll_script_checks_its_counters_before_touching_the_dom():
+    """Counter checks must come FIRST in the || chain.
+
+    `travelled >= document.body.scrollHeight || ticks > 40` short-circuits the
+    wrong way: the throwing operand runs first every time.
+    """
+    condition = next(line for line in intel._SCROLL_JS.splitlines()
+                     if "finish()" in line and "ticks" in line)
+    assert condition.index("ticks") < condition.index("height"), \
+        "DOM read precedes the bounded counter checks"
+    assert "document.body &&" in intel._SCROLL_JS, "unguarded document.body read"
+
+
+def test_scroll_script_body_is_wrapped_in_try_catch():
+    body = intel._SCROLL_JS.split("setInterval(")[1]
+    assert "try {" in body and "catch" in body, \
+        "a throwing tick must still settle the promise"
+
+
+# --------------------------------------------------------------------------
 # Concurrency — Chromium is ~300MB and api.py runs builds on a thread pool
 # --------------------------------------------------------------------------
 

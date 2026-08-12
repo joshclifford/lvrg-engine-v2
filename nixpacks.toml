@@ -16,13 +16,18 @@
 PLAYWRIGHT_BROWSERS_PATH = "/app/.cache/ms-playwright"
 
 [phases.build]
+# `python -m playwright`, not the bare `playwright` console script: the script
+# only resolves if nixpacks has the venv's bin/ on PATH for this phase, and that
+# is exactly the kind of thing that changes between provider versions. The
+# module form works wherever the interpreter that pip installed into is `python`.
+#
 # --with-deps pulls Chromium's shared libraries via apt. nixpacks images are
 # Debian underneath and the build runs as root, so this works; if a future base
-# image drops apt, swap to installing chromium as a nix package and point
-# PLAYWRIGHT_CHROMIUM_PATH at it instead (intel.py already reads that).
+# image drops apt, install chromium as a nix package instead and point
+# PLAYWRIGHT_CHROMIUM_PATH at it (intel.py already reads that).
 #
 # chromium only — firefox and webkit would triple the image for no gain.
-cmds = ["playwright install --with-deps chromium"]
+cmds = ["python -m playwright install --with-deps chromium"]
 
 # Deliberately no [phases.install] override: nixpacks' own pip step already
 # reads requirements.txt, and replacing it is how the venv path drifts out from
