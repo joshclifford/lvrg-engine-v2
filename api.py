@@ -222,6 +222,33 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         line = sse("log", text=text, level=level)
         logs.append(line)
 
+    # ── Callback state ───────────────────────────────────────────────────────
+    # These live OUTSIDE the try so the finally block can still read them after
+    # the generator is torn down mid-flight.
+    preview_url = None
+    pipeline_error = None
+    callback_sent = False
+
+    def _send_callback_once():
+        """Report the build outcome to the caller. Safe to call repeatedly.
+
+        MUST be synchronous. This is invoked from `finally`, which on a client
+        disconnect runs while GeneratorExit is propagating — awaiting there
+        raises "async generator ignored GeneratorExit" and the callback would be
+        lost precisely when it matters most.
+        """
+        nonlocal callback_sent
+        if callback_sent or no_deploy:
+            return
+        callback_sent = True
+        if preview_url:
+            _post_build_callback(callback_url, callback_secret, lead_id, "ready", preview_url=preview_url)
+        else:
+            _post_build_callback(
+                callback_url, callback_secret, lead_id, "failed",
+                error=pipeline_error or "Site generated but deploy failed.",
+            )
+
     try:
         # ── Step 0: Fetch queue contact data (Scout may have found email/phone) ──
         queue_contact = {}
@@ -331,29 +358,10 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
             except Exception as e:
                 yield sse("log", text=f"Queue write-back skipped: {e}", level="dim")
 
-        # ── Step 6c: Report the outcome to the caller ────────────────
-        # Skipped on no_deploy: preview_url is a local path there, and the
-        # callback pins the URL to an allowlist of public hosts.
-        if not no_deploy:
-            if preview_url:
-                await loop.run_in_executor(
-                    None,
-                    lambda: _post_build_callback(
-                        callback_url, callback_secret, lead_id, "ready", preview_url=preview_url
-                    ),
-                )
-            else:
-                # Generated but the deploy failed — there is no URL to hand back,
-                # so this is a real failure from the caller's point of view.
-                await loop.run_in_executor(
-                    None,
-                    lambda: _post_build_callback(
-                        callback_url, callback_secret, lead_id, "failed",
-                        error="Site generated but deploy failed.",
-                    ),
-                )
-
         # ── Done ─────────────────────────────────────────────────────
+        # NOTE: the outcome callback is NOT sent here. It fires from `finally`
+        # below — see the comment there for why this is the only placement that
+        # survives the case it exists to handle.
         yield sse("result", payload={
             "preview_url": preview_url,
             "email": email_data,
@@ -363,18 +371,35 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         yield sse("done", status="complete")
 
     except Exception as e:
+        pipeline_error = str(e)
         yield sse("log", text=f"Pipeline error: {e}", level="error")
-        # Tell the caller too, so the lead fails immediately instead of sitting
-        # `building` until their reaper window elapses.
-        try:
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: _post_build_callback(callback_url, callback_secret, lead_id, "failed", error=str(e)),
-            )
-        except Exception:
-            pass
         yield sse("error", text=str(e))
         yield sse("done", status="error")
+
+    finally:
+        # ── Report the outcome to the caller — ALWAYS ────────────────────────
+        #
+        # This block, not a step in the try, is the only correct home for the
+        # callback. run_pipeline is an async generator driven by
+        # StreamingResponse: when the caller's HTTP connection drops, Starlette
+        # stops iterating and execution NEVER returns to the body — the next
+        # `yield` raises GeneratorExit and everything after it is skipped.
+        #
+        # That is exactly the scenario the callback exists for. leadscraper's
+        # build-smart-site aborts its fetch at 160s; this pipeline regularly
+        # runs longer (13 Aug: site deployed at 164s). Observed live — the
+        # engine logged `[deploy] ... UNVERIFIED https://...` at 12:17:53, the
+        # caller had already disconnected at ~12:17:49, and the callback that
+        # sat after the deploy step never ran. The site went live, the lead
+        # stayed `building`, and only the reaper eventually cleared it.
+        #
+        # `finally` still runs while GeneratorExit propagates, so the report
+        # survives the disconnect. It must stay synchronous: awaiting here
+        # raises "async generator ignored GeneratorExit".
+        try:
+            _send_callback_once()
+        except Exception as _cb_err:
+            print(f"  [callback] unexpected error while reporting outcome: {_cb_err}")
 
 
 @app.post("/build")
