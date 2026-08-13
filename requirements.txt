@@ -4,3 +4,8 @@ anthropic==0.121.0
 requests==2.32.3
 python-slugify==8.0.4
 supabase==2.15.2
+# Renders the prospect's page in a real browser before extraction (POD01-17).
+# The Python package alone is not enough — a chromium has to reach the image
+# too; see nixpacks.toml. If it does not, intel.py logs it and falls back to the
+# plain fetch rather than failing the build.
+playwright==1.62.0
