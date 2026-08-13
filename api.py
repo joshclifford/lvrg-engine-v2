@@ -76,12 +76,69 @@ app.add_middleware(
 )
 
 
+def _post_build_callback(
+    callback_url: str,
+    callback_secret: str,
+    lead_id: str,
+    status: str,
+    preview_url: str = None,
+    error: str = None,
+) -> None:
+    """Tell the caller how the build actually ended.
+
+    WHY (13 Aug 2026): leadscraper's build-smart-site waits on /build with a
+    timeout and used to treat that timeout as failure. Real builds run 106-150s
+    against its 160s wait, so builds that had ALREADY SUCCEEDED were written off
+    — one site was deployed 365ms before the caller gave up, and the lead was
+    marked failed and refunded while the page sat live on GitHub Pages.
+
+    It cannot simply read our result: this engine writes to a DIFFERENT Supabase
+    project (lm-tool's `leads`/`engine_queue`) and has no access to leadscraper's
+    `businesses` table. So we report over HTTP instead, which also means no
+    leadscraper service-role key ever has to live on Railway.
+
+    NEVER RAISES. This engine is shared with lm-tool, whose builds must not fail
+    because a leadscraper endpoint is down or misconfigured. Best-effort only.
+    """
+    if not callback_url or not callback_secret or not lead_id:
+        return  # caller didn't ask for a callback (lm-tool, smoke tests, CLI)
+    try:
+        import urllib.request
+        payload = {"lead_id": lead_id, "status": status}
+        if preview_url:
+            payload["preview_url"] = preview_url
+        if error:
+            payload["error"] = str(error)[:500]
+        req = urllib.request.Request(
+            callback_url,
+            data=json.dumps(payload).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "x-callback-secret": callback_secret,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as res:
+            res.read()
+        print(f"  [callback] ✓ reported {status} for lead {lead_id}")
+    except Exception as e:
+        # Logged, never raised. If this fails the lead stays `building` on the
+        # caller's side and their reaper refunds it — degraded, not broken.
+        print(f"  [callback] failed to report {status} for lead {lead_id}: {e}")
+
+
 class BuildRequest(BaseModel):
     domain: str
     no_deploy: bool = False
     offer: str = "Smart Site"
     cta: str = "Book a Call"
     notes: str = ""
+    # Completion callback (leadscraper). All three must be present or the
+    # callback is skipped entirely — every other caller omits them and is
+    # unaffected.
+    lead_id: str = ""
+    callback_url: str = ""
+    callback_secret: str = ""
     # Known facts the caller already holds. leadscraper enriches every lead via
     # Apify + Hunter, so it has the phone, email, address, socials and a real
     # Google rating before the engine starts. Re-deriving them from a scrape is
@@ -150,7 +207,7 @@ def _merge_known(intel: dict, known: dict) -> list:
     return used
 
 
-async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None) -> AsyncGenerator[str, None]:
+async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "") -> AsyncGenerator[str, None]:
     """Run the full engine pipeline, yielding SSE events."""
 
     loop = asyncio.get_event_loop()
@@ -274,6 +331,28 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
             except Exception as e:
                 yield sse("log", text=f"Queue write-back skipped: {e}", level="dim")
 
+        # ── Step 6c: Report the outcome to the caller ────────────────
+        # Skipped on no_deploy: preview_url is a local path there, and the
+        # callback pins the URL to an allowlist of public hosts.
+        if not no_deploy:
+            if preview_url:
+                await loop.run_in_executor(
+                    None,
+                    lambda: _post_build_callback(
+                        callback_url, callback_secret, lead_id, "ready", preview_url=preview_url
+                    ),
+                )
+            else:
+                # Generated but the deploy failed — there is no URL to hand back,
+                # so this is a real failure from the caller's point of view.
+                await loop.run_in_executor(
+                    None,
+                    lambda: _post_build_callback(
+                        callback_url, callback_secret, lead_id, "failed",
+                        error="Site generated but deploy failed.",
+                    ),
+                )
+
         # ── Done ─────────────────────────────────────────────────────
         yield sse("result", payload={
             "preview_url": preview_url,
@@ -285,6 +364,15 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
 
     except Exception as e:
         yield sse("log", text=f"Pipeline error: {e}", level="error")
+        # Tell the caller too, so the lead fails immediately instead of sitting
+        # `building` until their reaper window elapses.
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _post_build_callback(callback_url, callback_secret, lead_id, "failed", error=str(e)),
+            )
+        except Exception:
+            pass
         yield sse("error", text=str(e))
         yield sse("done", status="error")
 
@@ -299,7 +387,8 @@ async def build(req: BuildRequest):
         raise HTTPException(status_code=400, detail="domain is required")
 
     return StreamingResponse(
-        run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes, req.known, req.r6),
+        run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes, req.known, req.r6,
+                     req.lead_id, req.callback_url, req.callback_secret),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
