@@ -15,16 +15,30 @@ from config import GITHUB_USER, GITHUB_REPO, PREVIEW_BASE_URL
 # GitHub Pages builds asynchronously, so the URL is not live the moment the commit
 # ref moves — that gap is what put 404s in front of prospects.
 #
-# The window is small on purpose. leadscraper aborts the engine call at 135s, and
-# that ceiling cannot be raised: it is headroom under Supabase's 150s edge-function
-# lifetime, which the background task shares. Generation alone takes ~82s, so this
-# poll gets the tail of the budget, not a generous slice of it.
+# The window is small on purpose, and it is not the only safety net: leadscraper's
+# client-side readiness probe covers the first 60s after a build, and since 13 Aug
+# the build-outcome callback plus the 5-minute reaper settle the status
+# independently. This poll only catches the common case; anything slower is
+# reported as UNVERIFIED and left to those.
 #
-# A short poll is still the right call because it is not the only safety net —
-# leadscraper's client-side readiness probe covers the first 60s after a build.
-# This catches the common case (Pages usually serves within seconds); anything
-# slower is reported as UNVERIFIED and left to the probe.
-PAGES_VERIFY_TIMEOUT = int(os.environ.get("PAGES_VERIFY_TIMEOUT", "15"))
+# ONE INTERVAL, NOT FIVE (17 Aug 2026). This was 10-15s, and on a slug GitHub
+# Pages has NEVER served — every first build of a sub-page lead since POD01-34 —
+# the full window is spent and then fails anyway, because a brand-new path takes
+# Pages longer than the window no matter how long the window is. That wasted time
+# is what tipped a 158s build to 168s and past leadscraper's 160s abort:
+#
+#   11:53:47  pushed
+#   11:53:54  WARNING: Pages had not served it after 10s — UNVERIFIED
+#
+# So it now checks once. A new path is UNVERIFIED either way; spending 10s to
+# learn that only made the caller give up first.
+#
+# The old comment here claimed "leadscraper aborts at 135s, and that ceiling
+# cannot be raised: it is headroom under Supabase's 150s edge-function lifetime."
+# Both halves were false and worth recording: the abort is 160s, and 13 Aug
+# measured three executions running a full 200s before shutdown, so the 150s
+# figure was stale and the ceiling always had room.
+PAGES_VERIFY_TIMEOUT = int(os.environ.get("PAGES_VERIFY_TIMEOUT", "3"))
 PAGES_VERIFY_INTERVAL = 3
 
 
