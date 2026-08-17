@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from intel import scrape_site, grade_site
 from generator import generate_site, generate_email
 from deploy import deploy_site
+from slug import canonical_domain, make_slug
 from supabase_client import upsert_lead, log_event, update_engine_queue_result
 
 # Interactive docs are off unless ENABLE_DOCS is set. This service is public and
@@ -139,6 +140,10 @@ class BuildRequest(BaseModel):
     lead_id: str = ""
     callback_url: str = ""
     callback_secret: str = ""
+    # The lead's own page, path included, when `domain` alone is not the business
+    # (POD01-34). Additive and same-host-only — see the check in /build. Empty
+    # means "scrape the root", which is exactly what every caller did before.
+    page_url: str = ""
     # Known facts the caller already holds. leadscraper enriches every lead via
     # Apify + Hunter, so it has the phone, email, address, socials and a real
     # Google rating before the engine starts. Re-deriving them from a scrape is
@@ -207,7 +212,7 @@ def _merge_known(intel: dict, known: dict) -> list:
     return used
 
 
-async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "") -> AsyncGenerator[str, None]:
+async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "", page_url: str = "") -> AsyncGenerator[str, None]:
     """Run the full engine pipeline, yielding SSE events."""
 
     loop = asyncio.get_event_loop()
@@ -265,7 +270,7 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
 
         # ── Step 1: Intel ────────────────────────────────────────────
         yield sse("log", text=f"Reading {domain}...", level="info")
-        intel = await loop.run_in_executor(None, scrape_site, domain)
+        intel = await loop.run_in_executor(None, scrape_site, domain, page_url)
         # Prefer Scout-found email/phone over scraped (Scout finds real contact emails)
         if queue_contact.get("email"): intel["email"] = queue_contact["email"]
         if queue_contact.get("phone"): intel["phone"] = queue_contact["phone"]
@@ -288,8 +293,10 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
             yield sse("log", text=f"Score {grade['total']}/10 — noted, building anyway", level="info")
 
         # ── Step 3: Generate site ────────────────────────────────────
-        from slug import make_slug
-        prospect_id = make_slug(domain)
+        # page_url keeps two sub-businesses on one domain from sharing a preview
+        # folder and overwriting each other's live page (POD01-34). Empty for a
+        # root-domain lead, which yields the identical slug to before.
+        prospect_id = make_slug(domain, page_url)
 
         yield sse("log", text="Generating Smart Site with Claude...", level="info")
         if notes:
@@ -411,9 +418,28 @@ async def build(req: BuildRequest):
     if not domain:
         raise HTTPException(status_code=400, detail="domain is required")
 
+    # POD01-34: the sub-page to scrape, if the caller named one. `domain` above
+    # is left flattened on purpose — the slug, the engine_queue join and every
+    # log key derive from it.
+    #
+    # Same host only, and that is a security requirement rather than tidiness:
+    # /build takes no auth and CORS is open, so `domain` is already an
+    # unauthenticated fetch primitive — but it can only ever reach a root. A
+    # page_url free to name a different host would widen that to arbitrary paths
+    # on arbitrary hosts. Pinning it to `domain` means this field can reach
+    # nothing the request could not already reach.
+    #
+    # canonical_domain on BOTH sides, not string equality: the caller strips a
+    # leading `www.` when it derives `domain`, so `www.acme.com/x` against
+    # `acme.com` is the normal case, not the exception.
+    page_url = (req.page_url or "").strip()
+    if page_url and canonical_domain(page_url) != canonical_domain(domain):
+        print(f"  [build] ignoring page_url — host does not match domain {domain}")
+        page_url = ""
+
     return StreamingResponse(
         run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes, req.known, req.r6,
-                     req.lead_id, req.callback_url, req.callback_secret),
+                     req.lead_id, req.callback_url, req.callback_secret, page_url),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

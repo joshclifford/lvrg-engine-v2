@@ -887,17 +887,36 @@ Return ONLY valid JSON, no markdown, no explanation."""
 INTEL_BUDGET_SECONDS = int(os.environ.get("INTEL_BUDGET_SECONDS", "30"))
 
 
-def scrape_site(domain: str) -> dict:
-    """Full intel gather for a prospect domain."""
+def scrape_site(domain: str, page_url: str = "") -> dict:
+    """Full intel gather for a prospect domain.
+
+    `page_url` is the lead's OWN page when the caller has one — the full stored
+    website URL, path included. `domain` stays the bare host regardless, because
+    the slug, the queue join and the Claude extraction prompt all key on it.
+
+    WHY (POD01-34): this function used to flatten the path and fetch the root, so
+    a business that lives inside a larger site got the PARENT scraped. A
+    restaurant at `ateliers-atbs.fr/restauration/` was built as the charity that
+    owns the building — conditioning, laundry and floral services — with the
+    restaurant's own 4.9 stars and phone number layered on top. Nothing looked
+    broken, which is why it shipped. 25% of leads store a URL with a path.
+
+    Falls back to `https://{domain}` when no page_url is given, so every caller
+    that doesn't send one (lm-tool, run_engine.py, smoke tests) is unaffected.
+    """
 
     started = time.monotonic()
     domain = domain.strip().lower()
     domain = domain.replace("https://", "").replace("http://", "")
     domain = domain.split("/")[0].split("?")[0].strip()
-    url = f"https://{domain}"
+    # The scrape target and the identity are now two different things. Everything
+    # downstream still identifies the business by `domain`; only the fetch moves.
+    url = (page_url or "").strip() or f"https://{domain}"
     print(f"  [intel] Fetching {url}...")
-    
-    scraped = fetch_site_content(domain)
+
+    # fetch_site_content already passes a full URL through untouched
+    # (`if not domain.startswith("http")`), so it needs no change.
+    scraped = fetch_site_content(url)
     raw_text, raw_html = scraped["text"], scraped["html"]
 
     # Never build from an unread site. Without this the model invents the whole

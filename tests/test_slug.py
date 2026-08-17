@@ -120,3 +120,133 @@ def test_no_collisions_across_a_realistic_set():
         s = make_slug(d)
         assert s not in slugs, f"collision: {d} and {slugs[s]} both -> {s}"
         slugs[s] = d
+
+
+# --------------------------------------------------------------------------
+# POD01-34 — one domain, several businesses
+#
+# `extractDomain` / `scrape_site` used to flatten the path, so a business living
+# inside a larger site got the PARENT scraped and published. The fix carries the
+# lead's own page as `page_url`, which means the slug now has to tell two pages
+# on ONE domain apart — otherwise the second build overwrites the first's live
+# preview, the same failure E2 fixed for dots vs hyphens.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("page_url", [
+    "",
+    "https://acmedental.com",
+    "https://acmedental.com/",
+    "https://www.acmedental.com/",
+    "https://acmedental.com//",
+    "https://acmedental.com/?utm_source=x",
+    "https://acmedental.com/#booking",
+])
+def test_root_page_url_is_byte_identical_to_no_page_url(page_url):
+    """Acceptance criterion: a lead with no path behaves exactly as today.
+
+    This is what stops every already-published preview from being orphaned — a
+    root-domain lead must keep the folder its emailed link already points at.
+    """
+    assert make_slug("acmedental.com", page_url) == make_slug("acmedental.com")
+    assert make_slug("acmedental.com", page_url) == "acmedental-com"
+
+
+def test_sub_page_gets_its_own_slug():
+    """The real case: a restaurant inside a charity's site (lead 39923c42-…)."""
+    parent = make_slug("ateliers-atbs.fr")
+    restaurant = make_slug("ateliers-atbs.fr", "https://www.ateliers-atbs.fr/restauration/")
+    assert parent == "ateliers--atbs-fr"
+    assert restaurant == "ateliers--atbs-fr---restauration"
+    assert parent != restaurant
+
+
+def test_siblings_on_one_domain_do_not_collide():
+    """Two sub-businesses of the same parent must not share a preview folder."""
+    slugs = {
+        p: make_slug("ateliers-atbs.fr", f"https://ateliers-atbs.fr{p}")
+        for p in ["/restauration/", "/blanchisserie/", "/espaces-verts/", "/floral"]
+    }
+    assert len(set(slugs.values())) == len(slugs), f"collision among {slugs}"
+
+
+@pytest.mark.parametrize("a,b", [
+    # A slash and a hyphen must not collapse together — the path half of E2.
+    ("/menu/lunch",  "/menu-lunch"),
+    ("/menu-lunch",  "/menu--lunch"),
+    ("/menu/lunch",  "/menu--lunch"),
+    ("/en/menu",     "/en-menu"),
+    # Paths are case-sensitive on most servers, unlike domains.
+    ("/menu",        "/Menu"),
+    # slugify transliterates, so these two are different pages.
+    ("/café",        "/cafe"),
+])
+def test_distinct_paths_do_not_collide(a, b):
+    """All six of these pairs collapsed onto one slug in the first cut of the fix.
+
+    `slugify(path)` folds `/`, `-`, case and accents all onto the same character
+    set, so three genuinely different pages landed on `menu-lunch`. Caught by a
+    sweep before it shipped, not after.
+    """
+    sa = make_slug("acme.com", f"https://acme.com{a}")
+    sb = make_slug("acme.com", f"https://acme.com{b}")
+    assert sa != sb, f"{a} and {b} both -> {sa}"
+
+
+def test_trailing_slash_is_the_same_page():
+    """`/menu` and `/menu/` are one resource — they SHOULD share a slug."""
+    assert (make_slug("acme.com", "https://acme.com/menu")
+            == make_slug("acme.com", "https://acme.com/menu/"))
+
+
+def test_long_paths_sharing_a_prefix_stay_distinct():
+    """The length clip must not become a collision.
+
+    Two paths identical for their first 40 characters would otherwise land on
+    one folder, which is the overwrite this suffix exists to prevent.
+    """
+    base = "https://acme.com/" + "a" * 60
+    assert make_slug("acme.com", f"{base}/one") != make_slug("acme.com", f"{base}/two")
+
+
+def test_readable_form_survives_for_the_common_case():
+    """A digest on every slug would be injective but unreadable in the repo.
+
+    Plain paths must stay legible; only lossy ones pay for a digest.
+    """
+    assert make_slug("clinic.org", "https://clinic.org/departments/cardiology") == (
+        "clinic-org---departments-cardiology"
+    )
+
+
+def test_slug_stays_within_the_preview_proxy_ceiling():
+    """leadscraper's serve-smart-site rejects a slug over 128 chars.
+
+    A longer slug deploys fine and then 400s on the preview link that has already
+    been emailed, so the suffix has to absorb the limit — the domain half cannot
+    shrink without orphaning previews that are already published.
+    """
+    long_domain = "-".join(["averylongbusinessname"] * 3) + ".example.co.uk"
+    for path in ["/x", "/departments/cardiology", "/" + "a" * 200,
+                 "/" + "/".join(["segment"] * 30)]:
+        s = make_slug(long_domain, f"https://{long_domain}{path}")
+        assert len(s) <= 128, f"{len(s)} chars for {path}: {s}"
+
+
+def test_long_domain_paths_still_do_not_collide():
+    """Shrinking the suffix must not reintroduce the overwrite it prevents."""
+    long_domain = "-".join(["averylongbusinessname"] * 3) + ".example.co.uk"
+    a = make_slug(long_domain, f"https://{long_domain}/departments/cardiology")
+    b = make_slug(long_domain, f"https://{long_domain}/departments/oncology")
+    assert a != b
+    assert len(a) <= 128 and len(b) <= 128
+
+
+def test_domain_only_slug_never_contains_the_boundary():
+    """`---` must mean exactly one thing: the domain/path split.
+
+    If a domain could produce `---`, the boundary would be ambiguous and two
+    different (domain, path) pairs could render the same string.
+    """
+    for d in ["foo-bar.com", "a-b.com", "münchen.de", "a.b.c.com",
+              "shop-dental.co.uk", "www.www.acme.com", "x--y.com"]:
+        assert "---" not in make_slug(d), d
