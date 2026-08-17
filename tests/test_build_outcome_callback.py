@@ -41,8 +41,13 @@ def rig(monkeypatch):
     """Stub every step of the pipeline and record what the callback posts."""
     posted = []
 
-    def _fake_post(url, secret, lead_id, status, preview_url=None, error=None):
-        posted.append({"status": status, "preview_url": preview_url, "error": error})
+    def _fake_post(url, secret, lead_id, status, preview_url=None, error=None, grade=None):
+        # Signature must track _post_build_callback exactly. It is documented
+        # never to raise, so a mismatch here does not surface as a TypeError —
+        # _deploy_and_report has already claimed the callback by then, and the
+        # report is simply lost. That is how adding `grade` broke two tests with
+        # "expected one callback, got []" rather than an obvious error.
+        posted.append({"status": status, "preview_url": preview_url, "error": error, "grade": grade})
 
     monkeypatch.setattr(api, "_post_build_callback", _fake_post)
 
@@ -161,6 +166,48 @@ def test_real_deploy_error_still_reports_failed(rig, monkeypatch):
     assert len(rig) == 1, f"expected one callback, got {rig}"
     assert rig[0]["status"] == "failed"
     assert rig[0]["preview_url"] is None
+
+
+def test_callback_carries_the_grade(rig, monkeypatch):
+    """A build resolved by callback must keep its score.
+
+    Before 17 Aug the grade was written only by build-smart-site after it
+    consumed the SSE stream, so a build that TIMED OUT — the whole reason this
+    callback exists — landed `ready` with a permanently null grade and no badge.
+    """
+    monkeypatch.setattr(api, "deploy_site", lambda p, s: f"https://pages.test/{p}/")
+
+    async def scenario():
+        async for _ in _pipeline():
+            pass
+        await asyncio.sleep(0.2)
+
+    _drive(scenario())
+    assert len(rig) == 1, f"expected one callback, got {rig}"
+    assert rig[0]["grade"] is not None, "callback carried no grade — the badge would stay empty"
+    assert rig[0]["grade"]["total"] == 4
+
+
+def test_grade_absent_when_the_build_dies_before_grading(rig, monkeypatch):
+    """Reading the grade must not itself break the report.
+
+    `grade` is assigned inside the try, so both callbacks can run before it
+    exists. Reading an unassigned local from a closure raises UnboundLocalError,
+    which would lose the callback at the exact moment it matters — hence the
+    separate `grade_for_callback` initialised to None.
+    """
+    monkeypatch.setattr(api, "scrape_site", lambda d, page_url="": (_ for _ in ()).throw(
+        ValueError("Could not read https://acme.com — 0 chars of text")))
+
+    async def scenario():
+        async for _ in _pipeline():
+            pass
+        await asyncio.sleep(0.2)
+
+    _drive(scenario())
+    assert len(rig) == 1, f"expected one callback, got {rig}"
+    assert rig[0]["status"] == "failed"
+    assert rig[0]["grade"] is None
 
 
 def test_pipeline_error_before_deploy_reports_failed(rig, monkeypatch):

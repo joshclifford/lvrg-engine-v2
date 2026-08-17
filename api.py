@@ -85,6 +85,7 @@ def _post_build_callback(
     status: str,
     preview_url: str = None,
     error: str = None,
+    grade: dict = None,
 ) -> None:
     """Tell the caller how the build actually ended.
 
@@ -111,6 +112,17 @@ def _post_build_callback(
             payload["preview_url"] = preview_url
         if error:
             payload["error"] = str(error)[:500]
+        # The score, so a build resolved by callback keeps it. Until 17 Aug the
+        # grade was written only by build-smart-site after it consumed the SSE
+        # stream, so a build that TIMED OUT — the entire case this callback
+        # exists for — landed `ready` with a permanently null grade and no badge
+        # in the UI. Sent as the total plus the per-pillar breakdown the badge
+        # tooltip expands; the receiver validates both and drops anything odd.
+        if isinstance(grade, dict):
+            total = grade.get("total")
+            if isinstance(total, (int, float)):
+                payload["grade"] = total
+            payload["grade_breakdown"] = grade
         req = urllib.request.Request(
             callback_url,
             data=json.dumps(payload).encode(),
@@ -240,6 +252,12 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
     # whole point: a caught exception means the deploy definitely failed, a
     # CancelledError means we simply stopped watching.
     deploy_error = None
+    # The grade, mirrored out here for the callback. A separate name from the
+    # `grade` local inside the try because both callbacks can fire BEFORE that
+    # local is assigned — a build that dies during intel never reaches grading,
+    # and reading an unassigned local from a closure is an UnboundLocalError,
+    # which would lose the callback entirely at the moment it matters.
+    grade_for_callback = None
     callback_sent = False
     # Two threads can reach the callback: the deploy worker (see
     # _deploy_and_report) and the generator's own `finally`. The lock makes
@@ -287,7 +305,8 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
                 return
             callback_sent = True
         if preview_url:
-            _post_build_callback(callback_url, callback_secret, lead_id, "ready", preview_url=preview_url)
+            _post_build_callback(callback_url, callback_secret, lead_id, "ready",
+                                 preview_url=preview_url, grade=grade_for_callback)
         else:
             _post_build_callback(
                 callback_url, callback_secret, lead_id, "failed",
@@ -322,7 +341,18 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
                 already = callback_sent
                 callback_sent = True
             if not already:
-                _post_build_callback(callback_url, callback_secret, lead_id, "ready", preview_url=url)
+                # The claim above happens BEFORE this call, so a throw here would
+                # consume the callback and leave `finally` unable to retry.
+                # _post_build_callback is documented never to raise, but relying
+                # on that silently is how a report gets lost at the one moment it
+                # matters — so make the failure loud. The 5-minute reaper is the
+                # backstop if it ever fires.
+                try:
+                    _post_build_callback(callback_url, callback_secret, lead_id, "ready",
+                                         preview_url=url, grade=grade_for_callback)
+                except Exception as _e:
+                    print(f"  [callback] FAILED to report ready for lead {lead_id}: {_e} — "
+                          f"the site IS live at {url}; the reaper will fail+refund it wrongly")
         return url
 
     try:
@@ -357,6 +387,7 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         # ── Step 2: Grade ────────────────────────────────────────────
         yield sse("log", text="Grading site...", level="info")
         grade = await loop.run_in_executor(None, grade_site, intel)
+        grade_for_callback = grade
         yield sse("log", text=f"Score: {grade['total']}/10 — {grade['verdict']}", level="success")
         yield sse("grade", data=grade)
 
