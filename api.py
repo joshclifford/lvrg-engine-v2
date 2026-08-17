@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 from datetime import datetime
 from typing import AsyncGenerator, Optional
 
@@ -232,7 +233,18 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
     # the generator is torn down mid-flight.
     preview_url = None
     pipeline_error = None
+    # Set only when deploy_site RAISED. Distinct from pipeline_error because the
+    # deploy is deliberately non-fatal ("— continuing"), so its exception is
+    # swallowed and never reaches the outer handler — yet it is still a KNOWN
+    # failure, unlike an await that was merely cancelled. That difference is the
+    # whole point: a caught exception means the deploy definitely failed, a
+    # CancelledError means we simply stopped watching.
+    deploy_error = None
     callback_sent = False
+    # Two threads can reach the callback: the deploy worker (see
+    # _deploy_and_report) and the generator's own `finally`. The lock makes
+    # "first one wins" actually true instead of probably true.
+    callback_lock = threading.Lock()
 
     def _send_callback_once():
         """Report the build outcome to the caller. Safe to call repeatedly.
@@ -241,18 +253,77 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         disconnect runs while GeneratorExit is propagating — awaiting there
         raises "async generator ignored GeneratorExit" and the callback would be
         lost precisely when it matters most.
+
+        WON'T REPORT A FAILURE IT CANNOT PROVE (17 Aug 2026). The old version
+        was `if preview_url: ready else: failed`, which treated "no URL yet" as
+        "the build failed". That is wrong whenever the pipeline was interrupted
+        rather than broken, and it cost us a real site:
+
+          11:53:44  edge:   Signal timed out          <- caller aborts at 160s
+          11:53:47  callback: reported failed          <- deploy still running
+          11:53:54  deploy: UNVERIFIED .../ateliers--atbs-fr---restauration/
+
+        The site went live and the row said `failed` — the exact outcome
+        POD01-32 exists to prevent, reintroduced through the callback that fix
+        added. `await run_in_executor(deploy_site, ...)` had been CANCELLED, and
+        CancelledError is a BaseException, so `except Exception` never saw it and
+        `pipeline_error` stayed None — leaving the bare "failed" default.
+
+        So an unknown outcome now sends NOTHING. The row stays `building` and the
+        5-minute reaper settles it, which is the same principle POD01-32 set:
+        an interruption is not a failure.
         """
         nonlocal callback_sent
-        if callback_sent or no_deploy:
+        if no_deploy:
             return
-        callback_sent = True
+        with callback_lock:
+            if callback_sent:
+                return
+            if not preview_url and not pipeline_error and not deploy_error:
+                # Interrupted, not failed. Say nothing rather than lie; the
+                # deploy worker may still be about to report the truth.
+                print(f"  [callback] outcome unknown for lead {lead_id} — "
+                      f"leaving it `building` for the reaper, not reporting failed")
+                return
+            callback_sent = True
         if preview_url:
             _post_build_callback(callback_url, callback_secret, lead_id, "ready", preview_url=preview_url)
         else:
             _post_build_callback(
                 callback_url, callback_secret, lead_id, "failed",
-                error=pipeline_error or "Site generated but deploy failed.",
+                error=pipeline_error or deploy_error or "Site generated but deploy failed.",
             )
+
+    def _deploy_and_report(prospect_id: str, site_dir: str) -> str:
+        """Deploy, then report the outcome — both inside ONE worker thread.
+
+        WHY THIS SHAPE (17 Aug 2026): `deploy_site` used to be awaited on its own
+        and the callback sent afterwards by the generator. A client disconnect
+        cancels that await, but it CANNOT cancel the thread already running
+        inside it — Python has no way to kill a running thread. So the push
+        completed, GitHub Pages was polled, the URL was returned... to a
+        coroutine that no longer existed. The result was discarded and the
+        generator reported `failed` for a site that was live.
+
+        Putting the report in the same thread as the work is what fixes it: the
+        thread runs to completion regardless of who is still listening, so
+        whatever it observes is what gets reported. Its return value is still
+        awaited for the SSE stream, but nothing depends on that await surviving.
+        """
+        nonlocal callback_sent
+        url = deploy_site(prospect_id, site_dir)
+        # Claim the callback before sending so the generator's `finally` cannot
+        # also fire. Belt and braces — `finally` already declines to report an
+        # unknown outcome — but this is the ordering that matters most, because
+        # `smart-site-callback` only transitions a row out of `building` once:
+        # whichever report lands first wins, and a wrong one cannot be undone.
+        if not no_deploy:
+            with callback_lock:
+                already = callback_sent
+                callback_sent = True
+            if not already:
+                _post_build_callback(callback_url, callback_secret, lead_id, "ready", preview_url=url)
+        return url
 
     try:
         # ── Step 0: Fetch queue contact data (Scout may have found email/phone) ──
@@ -311,11 +382,20 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         if not no_deploy:
             yield sse("log", text="Deploying to GitHub Pages...", level="info")
             try:
-                preview_url = await loop.run_in_executor(None, deploy_site, prospect_id, site_dir)
+                # _deploy_and_report, not deploy_site: the thread reports the
+                # outcome itself, so a caller that has already given up cannot
+                # cause a live site to be recorded as failed.
+                preview_url = await loop.run_in_executor(None, _deploy_and_report, prospect_id, site_dir)
                 yield sse("log", text=f"Live at {preview_url}", level="success")
             except Exception as e:
                 yield sse("log", text=f"Deploy failed: {e} — continuing", level="error")
                 preview_url = None
+                # Record it: a CAUGHT exception is a proven failure, and without
+                # this the callback would classify it as "unknown" and stay
+                # silent, leaving the lead to be reaped 15 minutes later instead
+                # of failing immediately. CancelledError never lands here — it is
+                # a BaseException — which is exactly the discrimination we want.
+                deploy_error = f"Deploy failed: {e}"
         else:
             preview_url = f"[local] {site_dir}/index.html"
 
