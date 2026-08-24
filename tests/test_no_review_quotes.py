@@ -31,13 +31,15 @@ def _code_of(fn) -> str:
 
 
 def test_generator_has_no_reviews_branch():
-    code = _code_of(generator.generate_site)
+    # Moved out of generate_site into _build_reviews_block (multi-page
+    # generation reuses this same builder per page) — the guard follows.
+    code = _code_of(generator._build_reviews_block)
     assert 'intel.get("reviews"' not in code
     assert "if reviews:" not in code
 
 
 def test_no_verbatim_quote_instruction_survives():
-    code = _code_of(generator.generate_site).upper()
+    code = _code_of(generator._build_reviews_block).upper()
     assert "REAL CUSTOMER REVIEWS" not in code
     assert "VERBATIM AS TESTIMONIALS" not in code
 

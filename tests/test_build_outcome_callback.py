@@ -60,6 +60,9 @@ def rig(monkeypatch):
         "total": 4, "verdict": "weak", "worth_targeting": True, "breakdown": {},
     })
     monkeypatch.setattr(api, "generate_site", lambda *a, **k: "/tmp/site")
+    monkeypatch.setattr(api, "generate_multi_page_site", lambda *a, **k: {
+        "index": "/tmp/site/index.html", "contact": "/tmp/site/contact.html",
+    })
     monkeypatch.setattr(api, "generate_email", lambda *a, **k: {"subject": "s", "body": "b"})
     # Supabase write-back is not what these tests are about.
     monkeypatch.setattr(api, "upsert_lead", lambda **k: None)
@@ -243,3 +246,24 @@ def test_no_deploy_never_reports(rig, monkeypatch):
 
     _drive(scenario())
     assert rig == [], f"no_deploy run reported something: {rig}"
+
+
+# ---------------------------------------------------------------------------
+# multi-page builds reuse this exact mechanism unchanged
+# ---------------------------------------------------------------------------
+
+def test_multi_page_build_still_reports_exactly_once(rig, monkeypatch):
+    """The branch that plans/generates several pages happens entirely before
+    the deploy/callback step — this pins down that the callback still fires
+    exactly once through the identical path, same as a single-page build."""
+    monkeypatch.setattr(api, "deploy_site", lambda p, s: f"https://pages.test/{p}/index.html")
+
+    async def scenario():
+        async for _ in _pipeline(multi_page=True):
+            pass
+        await asyncio.sleep(0.2)
+
+    _drive(scenario())
+    assert len(rig) == 1, f"expected one callback, got {rig}"
+    assert rig[0]["status"] == "ready"
+    assert rig[0]["preview_url"] == "https://pages.test/acme-com/index.html"

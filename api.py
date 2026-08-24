@@ -18,7 +18,8 @@ from pydantic import BaseModel
 
 # Engine modules
 from intel import scrape_site, grade_site
-from generator import generate_site, generate_email
+from generator import generate_site, generate_multi_page_site, generate_email
+from pages import plan_pages
 from deploy import deploy_site
 from slug import canonical_domain, make_slug
 from supabase_client import upsert_lead, log_event, update_engine_queue_result
@@ -169,6 +170,11 @@ class BuildRequest(BaseModel):
     # (MCP tool, smoke_test.sh, direct API calls) — generator.py falls back
     # to its existing Claude-extracted pain_point when this is absent.
     r6: Optional[dict] = None
+    # Opt into a multi-page build (Home/About/Services/Contact, planned by
+    # pages.plan_pages) instead of today's single index.html. Default off —
+    # every existing caller (leadscraper's current payload, run_engine.py,
+    # smoke tests) omits this and is completely unaffected.
+    multi_page: bool = False
 
 
 class ChatRequest(BaseModel):
@@ -225,7 +231,7 @@ def _merge_known(intel: dict, known: dict) -> list:
     return used
 
 
-async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "", page_url: str = "") -> AsyncGenerator[str, None]:
+async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "", page_url: str = "", multi_page: bool = False) -> AsyncGenerator[str, None]:
     """Run the full engine pipeline, yielding SSE events."""
 
     loop = asyncio.get_event_loop()
@@ -405,7 +411,18 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
             yield sse("log", text=f"Notes: {notes}", level="info")
         if r6:
             yield sse("log", text="Grounding copy in R6 audit's weakest pillar", level="info")
-        site_dir = await loop.run_in_executor(None, generate_site, intel, prospect_id, notes, r6)
+
+        site_paths = None
+        if multi_page:
+            pages_plan = plan_pages(intel)
+            yield sse("log", text=f"Planned {len(pages_plan)} pages: {', '.join(p['title'] for p in pages_plan)}", level="info")
+            site_paths = await loop.run_in_executor(None, generate_multi_page_site, intel, prospect_id, pages_plan, notes, r6)
+            # Derived from an actual returned path rather than importing
+            # SITES_DIR here — one less place that has to agree on where the
+            # engine writes its output.
+            site_dir = os.path.dirname(next(iter(site_paths.values())))
+        else:
+            site_dir = await loop.run_in_executor(None, generate_site, intel, prospect_id, notes, r6)
         yield sse("log", text="Site generated", level="success")
 
         # ── Step 4: Deploy ───────────────────────────────────────────
@@ -480,12 +497,22 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         # NOTE: the outcome callback is NOT sent here. It fires from `finally`
         # below — see the comment there for why this is the only placement that
         # survives the case it exists to handle.
-        yield sse("result", payload={
+        result_payload = {
             "preview_url": preview_url,
             "email": email_data,
             "intel": intel,
             "grade": grade,
-        })
+        }
+        # Additive — `preview_url` stays the homepage either way, so any
+        # existing consumer (leadscraper's smart_site_url column) needs no
+        # change. `pages` only appears for a multi_page build; a caller that
+        # doesn't know the key simply never looks at it.
+        if site_paths is not None and preview_url:
+            base = preview_url.rsplit("/", 1)[0]
+            result_payload["pages"] = {
+                slug: f"{base}/{os.path.basename(p)}" for slug, p in site_paths.items()
+            }
+        yield sse("result", payload=result_payload)
         yield sse("done", status="complete")
 
     except Exception as e:
@@ -550,7 +577,7 @@ async def build(req: BuildRequest):
 
     return StreamingResponse(
         run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes, req.known, req.r6,
-                     req.lead_id, req.callback_url, req.callback_secret, page_url),
+                     req.lead_id, req.callback_url, req.callback_secret, page_url, req.multi_page),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

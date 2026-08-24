@@ -34,8 +34,11 @@ def _code_of(fn) -> str:
 
 def test_no_invented_testimonials():
     """The prompt used to ask for 2-3 pull quotes and say to 'write them fresh'.
-    No real review text is ever supplied, so no quote can be legitimate."""
-    code = _code_of(generator.generate_site).lower()
+    No real review text is ever supplied, so no quote can be legitimate.
+
+    Moved out of generate_site into _build_reviews_block (multi-page
+    generation reuses this same builder per page) — the guard follows."""
+    code = _code_of(generator._build_reviews_block).lower()
     assert "write them fresh" not in code
     assert "use these verbatim as testimonials" not in code
 
@@ -44,7 +47,7 @@ def test_review_count_is_guarded_independently_of_rating():
     """A rating and a count arrive separately — Apify returns listings with one
     and not the other. Branching on the rating alone interpolated the missing
     count as the literal 'None' and published 'from None reviews'."""
-    code = _code_of(generator.generate_site)
+    code = _code_of(generator._build_reviews_block)
     if "{review_count}" in code:
         assert "review_count is not None" in code, (
             "review_count is interpolated without ever being checked — this is "
@@ -53,7 +56,7 @@ def test_review_count_is_guarded_independently_of_rating():
 
 
 def test_rating_without_a_count_has_its_own_branch():
-    code = _code_of(generator.generate_site).lower()
+    code = _code_of(generator._build_reviews_block).lower()
     assert "do not state one" in code
 
 
