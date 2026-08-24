@@ -80,21 +80,34 @@ def _wait_until_live(url: str) -> bool:
 
 
 def deploy_site(prospect_id: str, site_dir: str) -> str:
-    """Push site to GitHub Pages via Git Data API. No size limits. Returns public URL."""
+    """Push every *.html file in site_dir to GitHub Pages via Git Data API, in
+    one atomic commit. No size limits. Returns the public URL of index.html —
+    the homepage — regardless of how many other pages went along with it,
+    since that's the one URL smart_site_url stores. A single-page site (one
+    index.html, today's only caller shape) produces the exact same blob/tree/
+    commit/ref-update sequence as before this function generalized."""
 
-    print(f"  [deploy] Pushing {prospect_id} via Git Data API...")
+    filenames = sorted(f for f in os.listdir(site_dir) if f.endswith(".html"))
+    if not filenames:
+        raise RuntimeError(f"No .html files to deploy in {site_dir}")
 
-    # Read the HTML file
-    index_path = os.path.join(site_dir, "index.html")
-    with open(index_path, "rb") as f:
-        content = f.read()
+    print(f"  [deploy] Pushing {prospect_id} ({len(filenames)} page(s)) via Git Data API...")
 
-    # 1. Create a blob with the file content
-    blob = _api("POST", "git/blobs", {
-        "content": base64.b64encode(content).decode(),
-        "encoding": "base64"
-    })
-    blob_sha = blob["sha"]
+    # 1. Create one blob per file
+    tree_entries = []
+    for filename in filenames:
+        with open(os.path.join(site_dir, filename), "rb") as f:
+            content = f.read()
+        blob = _api("POST", "git/blobs", {
+            "content": base64.b64encode(content).decode(),
+            "encoding": "base64"
+        })
+        tree_entries.append({
+            "path": f"{prospect_id}/{filename}",
+            "mode": "100644",
+            "type": "blob",
+            "sha": blob["sha"]
+        })
 
     # 2. Get current HEAD commit and its tree
     ref = _api("GET", "git/ref/heads/main")
@@ -102,17 +115,10 @@ def deploy_site(prospect_id: str, site_dir: str) -> str:
     head_commit = _api("GET", f"git/commits/{head_sha}")
     base_tree_sha = head_commit["tree"]["sha"]
 
-    # 3. Create a new tree with our file
+    # 3. Create a new tree with all our files, in one commit
     tree = _api("POST", "git/trees", {
         "base_tree": base_tree_sha,
-        "tree": [
-            {
-                "path": f"{prospect_id}/index.html",
-                "mode": "100644",
-                "type": "blob",
-                "sha": blob_sha
-            }
-        ]
+        "tree": tree_entries
     })
     tree_sha = tree["sha"]
 

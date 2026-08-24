@@ -25,6 +25,13 @@ from config import SITES_DIR, BOOKING_URL, SENDER_NAME, SENDER_AGENCY
 # pages for timed-out builds.
 SITE_MAX_TOKENS = int(os.environ.get("SITE_MAX_TOKENS", "32000"))
 
+# Ceiling for ONE page of a multi-page build. Deliberately well under
+# SITE_MAX_TOKENS: today's single page covers 9 sections (claim bar through
+# footer) in one shot, but one page of a multi-page build covers far fewer —
+# and a 4-page build already runs 4 sequential calls inside the same overall
+# timeout budget one single-page call has today.
+PAGE_MAX_TOKENS = int(os.environ.get("PAGE_MAX_TOKENS", "14000"))
+
 
 def _get_client():
     key = os.environ.get("ANTHROPIC_API_KEY") or ""
@@ -258,26 +265,21 @@ function lvrgAddMsg(text, role) {{
 """
 
 
-def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[dict] = None) -> str:
-    """Generate a complete single-file HTML site for a prospect. Returns folder path."""
-
-    print(f"  [generator] Generating V2 site for {intel['business_name']}...")
-
-    notes_block = f"\n\nSPECIAL INSTRUCTIONS:\n{notes}\n" if notes else ""
-    design = _get_design_personality(intel.get("business_type", "other"))
-    pain_point = _pain_point_context(intel, r6)
-    
-    # Build photo block — real photos from the prospect's own site
+def _build_photo_block(intel: dict) -> str:
+    """Real photos from the prospect's own site, or an explicit no-placeholder
+    instruction — extracted from generate_site so generate_page can reuse the
+    exact same rendering without a second, drifting copy."""
     photos = intel.get("photos", [])
     if photos:
-        photo_block = f"""REAL PHOTOS (these are from the business's own website — use them as actual <img> tags, link directly to the URLs):
+        return f"""REAL PHOTOS (these are from the business's own website — use them as actual <img> tags, link directly to the URLs):
 {chr(10).join(f'  {i+1}. {url}' for i, url in enumerate(photos[:4]))}
 Use the best photo as the hero background (as an <img> with object-fit:cover, or as a CSS background-image url()).
 Use others in gallery/services sections where they fit naturally.
 Only use a photo if it makes sense in context — don't force it."""
-    else:
-        photo_block = "PHOTOS: No real photos available. Use CSS gradients and brand colors only — no placeholder images."
+    return "PHOTOS: No real photos available. Use CSS gradients and brand colors only — no placeholder images."
 
+
+def _build_reviews_block(intel: dict) -> str:
     # Build reviews block. Rating and review count are real data passed in from
     # the app (Google Maps via Apify), never scraped.
     #
@@ -294,9 +296,7 @@ Only use a photo if it makes sense in context — don't force it."""
     # Rating and count arrive independently: Apify returns plenty of listings
     # with one and not the other, and interpolating a missing count publishes the
     # literal string "from None reviews".
-    rating = intel.get("rating")
-    review_count = _as_count(intel.get("review_count"))
-
+    #
     # Resolved against 1b89852 (Hamza, same bug, same day). That commit fixed the
     # None rendering but KEPT the `if reviews:` branch — which is unreachable
     # (nothing populates intel["reviews"]) and still carried "use these verbatim
@@ -307,35 +307,72 @@ Only use a photo if it makes sense in context — don't force it."""
     # which is not social proof, it is an own goal on the prospect's own
     # branding. Zero is the absence of reviews, so it takes the no-count branch
     # below, which tells the model not to state one.
+    rating = intel.get("rating")
+    review_count = _as_count(intel.get("review_count"))
+
     if rating is not None and review_count is not None and review_count > 0:
-        reviews_block = (
+        return (
             f"SOCIAL PROOF: This business is rated {rating}★ from {review_count} reviews. "
             f"Use that as a stat. You have NO review text — do NOT write testimonial quotes."
         )
     elif rating is not None:
-        reviews_block = (
+        return (
             f"SOCIAL PROOF: This business is rated {rating}★. Use that as a stat. "
             f"You were NOT given a review count — do not state one. "
             f"You have NO review text — do NOT write testimonial quotes."
         )
-    else:
-        reviews_block = (
-            "REVIEWS: None available. Do NOT write testimonial quotes, do NOT invent "
-            "star ratings, and do NOT add a testimonials section."
-        )
+    return (
+        "REVIEWS: None available. Do NOT write testimonial quotes, do NOT invent "
+        "star ratings, and do NOT add a testimonials section."
+    )
 
-    # Build press block
+
+def _build_press_block(intel: dict) -> str:
     press_mentions = intel.get("press_mentions", [])
     if press_mentions:
-        press_block = f"""PRESS MENTIONS (use these as credibility signals — quote them if there's a good quote):
+        return f"""PRESS MENTIONS (use these as credibility signals — quote them if there's a good quote):
 {chr(10).join(f'  - {p["source"]}: "{p["title"]}"' + (f' — "{p["quote"]}"' if p.get("quote") else '') for p in press_mentions[:3])}"""
-    else:
-        press_block = "PRESS: No press mentions found."
+    return "PRESS: No press mentions found."
 
-    # Social profiles come from the app (Apify), merged in by api.py.
+
+def _build_social_block(intel: dict) -> str:
+    """Social profiles come from the app (Apify), merged in by api.py."""
     socials = intel.get("socials") or {}
     social_links = "\n".join(f"  {k.replace('_url', '').title()}: {v}" for k, v in socials.items())
-    social_block = f"SOCIAL PROFILES (link these in the footer):\n{social_links}" if social_links else ""
+    return f"SOCIAL PROFILES (link these in the footer):\n{social_links}" if social_links else ""
+
+
+def _strip_markdown_fences(html: str) -> str:
+    if html.startswith("```"):
+        html = re.sub(r'^```[a-z]*\n?', '', html)
+        html = re.sub(r'\n?```$', '', html)
+    return html
+
+
+def _close_truncated_html(html: str) -> str:
+    """Close a truncated response before anything else touches it. Without
+    this, widget/nav injection staples itself onto an unclosed document and
+    we publish malformed HTML. Parity with v1 generator.py."""
+    if not html.rstrip().endswith("</html>"):
+        if "</body>" not in html:
+            html += "\n</body>"
+        html += "\n</html>"
+    return html
+
+
+def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[dict] = None) -> str:
+    """Generate a complete single-file HTML site for a prospect. Returns folder path."""
+
+    print(f"  [generator] Generating V2 site for {intel['business_name']}...")
+
+    notes_block = f"\n\nSPECIAL INSTRUCTIONS:\n{notes}\n" if notes else ""
+    design = _get_design_personality(intel.get("business_type", "other"))
+    pain_point = _pain_point_context(intel, r6)
+
+    photo_block = _build_photo_block(intel)
+    reviews_block = _build_reviews_block(intel)
+    press_block = _build_press_block(intel)
+    social_block = _build_social_block(intel)
 
     site_prompt = f"""You are building a high-end preview website for {intel['business_name']}.{notes_block}
 
@@ -438,19 +475,8 @@ Start with <!DOCTYPE html>"""
         print(f"  [generator] WARNING: hit max_tokens ({SITE_MAX_TOKENS}) — page may be cut short")
 
     html = response.content[0].text.strip()
-    
-    # Strip markdown fences if Claude wrapped it
-    if html.startswith("```"):
-        html = re.sub(r'^```[a-z]*\n?', '', html)
-        html = re.sub(r'\n?```$', '', html)
-
-    # Close a truncated response before anything else touches it. Without this
-    # the widget injection below staples itself onto an unclosed document and we
-    # publish malformed HTML. Parity with v1 generator.py.
-    if not html.rstrip().endswith("</html>"):
-        if "</body>" not in html:
-            html += "\n</body>"
-        html += "\n</html>"
+    html = _strip_markdown_fences(html)
+    html = _close_truncated_html(html)
 
     # Inject chat widget before </body> — now always present, so the else is
     # only a belt-and-braces fallback.
@@ -469,6 +495,245 @@ Start with <!DOCTYPE html>"""
     
     print(f"  [generator] ✓ V2 site saved to {site_dir}")
     return site_dir
+
+
+def _inject_base_href(html: str, prospect_id: str) -> str:
+    """The public preview URL is {app}/preview/{slug} — no trailing slash, no
+    filename. A browser resolves a bare relative link like href="about.html"
+    against everything up to the LAST slash in the current URL, which is
+    ".../preview/" — dropping the slug entirely and 404ing. A <base> tag
+    fixes this for every relative link on the page at once. Root-relative
+    (not a full origin URL) since the preview is always same-origin with the
+    app. Claude has no way to know the final proxy hostname or slug, so this
+    has to be mechanical, unlike the nav bar itself."""
+    base_tag = f'<base href="/preview/{prospect_id}/">'
+    if "<head>" in html:
+        return html.replace("<head>", f"<head>\n  {base_tag}", 1)
+    return html.replace("<!DOCTYPE html>", f"<!DOCTYPE html>\n{base_tag}", 1)
+
+
+def _fix_absolute_page_links(html: str, pages_plan: list) -> str:
+    """Claude may write href="/about.html" (leading slash) out of training
+    habit despite being told to use relative links. A leading slash bypasses
+    <base> entirely and resolves to the app's own root instead of the
+    preview. Cheap, targeted fix: only rewrite hrefs matching a filename we
+    actually planned, never a blanket leading-slash strip (which could touch
+    an unrelated absolute link Claude legitimately wrote, e.g. to BOOKING_URL
+    if it happened to be root-relative)."""
+    for page in pages_plan:
+        filename = page["filename"]
+        html = html.replace(f'href="/{filename}"', f'href="{filename}"')
+        html = html.replace(f"href='/{filename}'", f"href='{filename}'")
+    return html
+
+
+def generate_page(
+    intel: dict,
+    design: dict,
+    page: dict,
+    nav: list,
+    notes: str = "",
+    r6: Optional[dict] = None,
+) -> str:
+    """Generate ONE page of a multi-page site. Returns raw HTML — does not
+    write to disk (generate_multi_page_site owns the filesystem). `design`
+    must be resolved ONCE by the caller and passed in unchanged for every
+    page in the build, never re-derived per page — that's what keeps a
+    4-page site looking like one business instead of four.
+
+    `nav` is the full page plan for this build, THIS page included — the
+    prompt renders the nav bar and footer from this exact list so every page
+    links to every other page, with no dead ends. Navigation is built
+    in-prompt, not spliced in afterward: it has to inherit the same Tailwind
+    classes/fonts/colors Claude just chose for this page's content, which a
+    mechanical post-injection (like the chat widget) can't do without risking
+    the "every page looks like a different website" failure this whole
+    feature exists to avoid.
+    """
+    notes_block = f"\n\nSPECIAL INSTRUCTIONS:\n{notes}\n" if notes else ""
+    pain_point = _pain_point_context(intel, r6)
+
+    photo_block = _build_photo_block(intel)
+    reviews_block = _build_reviews_block(intel)
+    press_block = _build_press_block(intel)
+    social_block = _build_social_block(intel)
+
+    nav_lines = "\n".join(
+        f'  - "{p["title"]}" → {p["filename"]}' + ("  (THIS PAGE — mark active)" if p["slug"] == page["slug"] else "")
+        for p in nav
+    )
+    is_home = page["slug"] == "index"
+
+    body_structure = (
+        """3. HERO — follow the hero style for this business type above.
+   Headline rule: Make it UNEXPECTED and SPECIFIC. Own something.
+   Bad: "San Diego's Premier Cocktail Experience"
+   Good: "The bar North Park didn't know it needed — until now"
+   One bold headline + one supporting line. Two CTAs.
+
+4. SOCIAL PROOF BAR — only stats given to you above. If none were given, omit entirely.
+
+5. SERVICES/MENU — 3 feature cards using their REAL services
+
+6. TESTIMONIALS — ONLY the review quotes provided above, verbatim. If none, OMIT.
+
+7. PRESS / AS SEEN IN — if press mentions provided, show as text badges. Skip if none.
+
+8. CTA BANNER — headline + copy driving toward: """ + intel.get('cta_angle', 'booking')
+        if is_home
+        else f"""3. PAGE CONTENT — this page is "{page['title']}". {page['brief']}
+   Build 2-4 sections appropriate to this page's purpose. Reuse the real
+   content blocks above (photos, reviews, press) only where they genuinely
+   fit this page's topic — do not force Home's exact section list onto a
+   page that isn't Home.
+
+4. CTA SECTION — headline + copy driving toward: """ + intel.get('cta_angle', 'booking')
+    )
+
+    page_prompt = f"""You are building ONE PAGE of a multi-page high-end preview website for {intel['business_name']}. This page is "{page['title']}".{notes_block}
+
+━━━ BUSINESS INTEL ━━━
+- Business: {intel['business_name']}
+- Type: {intel.get('business_type', 'other')}
+- Domain: {intel['domain']}
+- Description: {intel['description']}
+- Services: {', '.join(intel['services']) if intel['services'] else 'Not listed'}
+- Location: {intel['location']}
+- Neighborhood: {intel.get('neighborhood', '')}
+- Phone: {intel.get('phone', 'Not listed')}
+- Hours: {intel.get('hours', 'Not listed')}
+- Brand vibe: {intel.get('brand_vibe', 'clean, modern')}
+- Primary color: {intel.get('primary_color', '#333')}
+- Pain point: {pain_point}
+- CTA: {intel.get('cta_angle', 'Get in Touch')}
+
+━━━ REAL CONTENT ━━━
+{photo_block}
+
+{reviews_block}
+
+{press_block}
+
+{social_block}
+
+━━━ DESIGN PERSONALITY (must match every other page in this site exactly) ━━━
+Mood: {design['mood']}
+Fonts: {design['fonts']}
+Layout approach: {design['layout']}
+Hero style: {design['hero_style']}
+Reference aesthetic: {design['references']}
+
+━━━ TECH STACK ━━━
+Use Tailwind CSS via CDN — include this in <head>:
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = {{ theme: {{ extend: {{ colors: {{ brand: '{intel.get('primary_color','#f59e0b')}' }} }} }} }}</script>
+Use Google Fonts matching the design personality above — the SAME fonts on every page.
+This gives you full Tailwind (hover:, focus:, responsive, animations) — use it fully.
+NO inline style= attributes. Use Tailwind classes exclusively.
+
+━━━ THIS SITE'S PAGES ━━━
+This build has {len(nav)} page(s). Every page shares this exact nav bar and footer:
+{nav_lines}
+Link with RELATIVE filenames only (href="about.html") — NEVER a leading slash
+(href="/about.html") and NEVER a full URL. Give this page's own nav entry a
+visually distinct active treatment (different weight, underline, or accent
+color) so a visitor always knows which page they're on. The footer repeats
+the same links.
+
+━━━ STRUCTURE ━━━
+This is a single HTML page ({page['filename']}), one of {len(nav)} pages in this build.
+
+1. CLAIM BAR — sticky, black bg, centered single line:
+   "This site was built for **{intel['business_name']}** by LVRG Agency"
+   + gold pill "Claim This Site →" button linking to {BOOKING_URL}
+   Everything centered on one line. No left/right split.
+
+2. NAV — business name as logo, links to every page listed above (active page marked), primary CTA button
+
+{body_structure}
+
+9. FOOTER — {intel.get('location','')}, {intel.get('phone','')}, hours, and the same page links as the nav (active page marked)
+
+━━━ COPY RULES ━━━
+- Reference {intel.get('neighborhood') or intel.get('location','').split(',')[0]} naturally in copy
+- Every CTA drives toward: {intel.get('cta_angle', 'booking')}
+- Address this pain point: {pain_point}
+- NEVER write fake testimonials — if no real reviews, skip quotes entirely
+- Do not repeat another page's content verbatim — each page earns its place
+
+━━━ OUTPUT ━━━
+Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).
+Start with <!DOCTYPE html>"""
+
+    client = _get_client()
+    with client.messages.stream(
+        model="claude-opus-4-5",
+        max_tokens=PAGE_MAX_TOKENS,
+        messages=[{"role": "user", "content": page_prompt}],
+    ) as stream:
+        response = stream.get_final_message()
+
+    if response.stop_reason == "max_tokens":
+        print(f"  [generator] WARNING: hit max_tokens ({PAGE_MAX_TOKENS}) on page {page['filename']} — may be cut short")
+
+    html = response.content[0].text.strip()
+    html = _strip_markdown_fences(html)
+    html = _close_truncated_html(html)
+    return html
+
+
+def generate_multi_page_site(
+    intel: dict,
+    prospect_id: str,
+    pages_plan: list,
+    notes: str = "",
+    r6: Optional[dict] = None,
+) -> dict:
+    """Generate every planned page SEQUENTIALLY — one Claude call at a time,
+    never parallel. (Parallelizing this is a separate later change, blocked
+    on this engine having zero rate-limit retry/backoff handling today.)
+
+    Resolves the design personality ONCE and threads it into every page.
+    Wipes and recreates the prospect's folder first: a build that plans fewer
+    pages on a retry (e.g. Services no longer qualifies) must not leave a
+    stale services.html sitting in the folder for deploy_site to push
+    alongside the new set.
+
+    Fails fast — if any page throws, the exception propagates and NOTHING
+    gets deployed. A partial multi-page site would ship a nav bar with dead
+    links, which is worse than no site at all for that build.
+
+    Returns {slug: absolute_file_path}.
+    """
+    import shutil
+
+    design = _get_design_personality(intel.get("business_type", "other"))
+
+    site_dir = os.path.join(SITES_DIR, prospect_id)
+    if os.path.isdir(site_dir):
+        shutil.rmtree(site_dir)
+    os.makedirs(site_dir, exist_ok=True)
+
+    widget_html = _build_chat_widget(intel)
+
+    site_paths = {}
+    for page in pages_plan:
+        print(f"  [generator] Generating page '{page['title']}' ({page['filename']}) for {intel['business_name']}...")
+        html = generate_page(intel, design, page, pages_plan, notes, r6)
+        html = _inject_base_href(html, prospect_id)
+        html = _fix_absolute_page_links(html, pages_plan)
+        if "</body>" in html:
+            html = html.replace("</body>", widget_html + "\n</body>")
+        else:
+            html += widget_html
+
+        file_path = os.path.join(site_dir, page["filename"])
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        site_paths[page["slug"]] = file_path
+
+    print(f"  [generator] ✓ {len(site_paths)}-page V2 site saved to {site_dir}")
+    return site_paths
 
 
 def generate_email(intel: dict, grade: dict, prospect_id: str, r6: Optional[dict] = None) -> dict:
