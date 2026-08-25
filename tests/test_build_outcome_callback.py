@@ -82,6 +82,76 @@ def _pipeline(**over):
 
 
 # ---------------------------------------------------------------------------
+# 24 Aug 2026: caller gives up while GENERATION (not just deploy) is still
+# running — the exact bug a multi-page build's now-4x-longer generation step
+# started hitting for real. Deploy alone was protected since 17 Aug; this
+# pins down that generation is now covered by the same widened
+# _build_and_report, not just deploy.
+# ---------------------------------------------------------------------------
+
+def test_abandoned_generation_still_deploys_and_reports_ready(rig, monkeypatch):
+    """The bug as it actually happened: a multi-page build's generation step
+    ran long enough that the caller (leadscraper's 170s abort) disconnected
+    WHILE generate_multi_page_site was still running — before deploy_site was
+    ever reached. The generation thread kept running unattended (a Python
+    thread can't be cancelled), finished, and under the OLD code nothing
+    would ever call deploy_site or report anything: control never returned to
+    the (already torn-down) coroutine's deploy step. The site was generated
+    and never shipped, never reported, silently reaped 15 minutes later.
+
+    With generation folded into _build_and_report, the orphaned thread now
+    deploys and reports "ready" itself once generation finishes, regardless
+    of whether the coroutine that kicked it off still exists.
+    """
+    generation_started = asyncio.Event()
+
+    def slow_generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6):
+        # Mimics 3-4 sequential/concurrent Claude calls taking long enough to
+        # outlive the caller's patience — the thread runs to completion even
+        # though the coroutine awaiting it has been cancelled.
+        loop.call_soon_threadsafe(generation_started.set)
+        import time
+        time.sleep(0.3)
+        return {"index": f"/tmp/{prospect_id}/index.html", "contact": f"/tmp/{prospect_id}/contact.html"}
+
+    monkeypatch.setattr(api, "generate_multi_page_site", slow_generate_multi_page_site)
+    monkeypatch.setattr(api, "deploy_site", lambda p, s: f"https://pages.test/{p}/index.html")
+
+    async def scenario():
+        global loop
+        loop = asyncio.get_running_loop()
+        gen = _pipeline(multi_page=True)
+        async def pump():
+            async for _ in gen:
+                pass
+        task = asyncio.create_task(pump())
+        # Abandon while generation is in flight — deploy has not started yet.
+        await asyncio.wait_for(generation_started.wait(), timeout=5)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await gen.aclose()
+        # Give the orphaned worker thread time to finish generating, deploy,
+        # and report.
+        await asyncio.sleep(1.0)
+
+    _drive(scenario())
+
+    assert rig, (
+        "nothing was reported — under the old code this is exactly the bug: "
+        "the site generates, deploys, and nobody ever hears about it"
+    )
+    statuses = [p["status"] for p in rig]
+    assert "failed" not in statuses, (
+        f"reported failed for a site that deployed successfully: {rig}"
+    )
+    assert statuses.count("ready") == 1, f"expected exactly one ready, got {rig}"
+    assert rig[0]["preview_url"] == "https://pages.test/acme-com/index.html"
+
+
+# ---------------------------------------------------------------------------
 # the regression: caller gives up while the deploy is still running
 # ---------------------------------------------------------------------------
 
