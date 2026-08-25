@@ -9,6 +9,7 @@ V2 improvements:
   - Better headline direction
 """
 
+import concurrent.futures
 import os
 import re
 import json
@@ -27,15 +28,41 @@ SITE_MAX_TOKENS = int(os.environ.get("SITE_MAX_TOKENS", "32000"))
 
 # Ceiling for ONE page of a multi-page build. Deliberately well under
 # SITE_MAX_TOKENS: today's single page covers 9 sections (claim bar through
-# footer) in one shot, but one page of a multi-page build covers far fewer —
-# and a 4-page build already runs 4 sequential calls inside the same overall
-# timeout budget one single-page call has today.
+# footer) in one shot, but one page of a multi-page build covers far fewer.
 PAGE_MAX_TOKENS = int(os.environ.get("PAGE_MAX_TOKENS", "14000"))
 
+# How many pages of a multi-page build to generate at once (24 Aug 2026,
+# POD01-53 follow-up). Generating them one at a time — 4 sequential Claude
+# calls for a 4-page build — is what pushed real builds past leadscraper's
+# 170s abort window: the caller gave up, the generation thread kept running
+# unattended (a Python thread cannot be cancelled), and because nothing but
+# the deploy step reported its own outcome, a build that finished AFTER the
+# caller left never got deployed and never got reported — the row just sat
+# `building` until the 15-minute reaper reaped it, refunded it, and threw
+# away a site that had already been generated for nothing.
+#
+# Not left unbounded: MAX_PAGES in pages.py is env-overridable too, so a
+# future bump there must not silently fire an unbounded burst of concurrent
+# requests at Anthropic. Defaults to today's own MAX_PAGES ceiling (4), so
+# this is a no-op cap until either constant is raised past the other.
+PAGE_GENERATION_CONCURRENCY = int(os.environ.get("PAGE_GENERATION_CONCURRENCY", "4"))
 
-def _get_client():
+# Concurrent page generation means several requests can land on Anthropic at
+# once instead of one at a time, which makes a 429 more likely to be hit at
+# all — the SDK already retries 429/5xx with backoff (honoring Retry-After)
+# at its default of 2 attempts, which was fine for one request at a time and
+# is thin margin for a burst of up to PAGE_GENERATION_CONCURRENCY. Only the
+# per-page call opts into the higher count; generate_site/generate_email keep
+# the SDK default via a bare _get_client().
+PAGE_GENERATION_MAX_RETRIES = int(os.environ.get("PAGE_GENERATION_MAX_RETRIES", "5"))
+
+
+def _get_client(max_retries: int = 2):
+    # 2 is the anthropic SDK's own default — passed explicitly so callers that
+    # want more (concurrent multi-page generation, see PAGE_GENERATION_MAX_RETRIES)
+    # have somewhere to say so without touching every other call site.
     key = os.environ.get("ANTHROPIC_API_KEY") or ""
-    return anthropic.Anthropic(api_key=key)
+    return anthropic.Anthropic(api_key=key, max_retries=max_retries)
 
 
 # ── Design personality by business type ───────────────────────────────────────
@@ -665,7 +692,7 @@ This is a single HTML page ({page['filename']}), one of {len(nav)} pages in this
 Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).
 Start with <!DOCTYPE html>"""
 
-    client = _get_client()
+    client = _get_client(max_retries=PAGE_GENERATION_MAX_RETRIES)
     with client.messages.stream(
         model="claude-opus-4-5",
         max_tokens=PAGE_MAX_TOKENS,
@@ -689,9 +716,11 @@ def generate_multi_page_site(
     notes: str = "",
     r6: Optional[dict] = None,
 ) -> dict:
-    """Generate every planned page SEQUENTIALLY — one Claude call at a time,
-    never parallel. (Parallelizing this is a separate later change, blocked
-    on this engine having zero rate-limit retry/backoff handling today.)
+    """Generate every planned page CONCURRENTLY, capped at
+    PAGE_GENERATION_CONCURRENCY at a time (24 Aug 2026 — was strictly
+    sequential; see PAGE_GENERATION_CONCURRENCY's comment for why that
+    stopped being safe once real builds started missing leadscraper's abort
+    window).
 
     Resolves the design personality ONCE and threads it into every page.
     Wipes and recreates the prospect's folder first: a build that plans fewer
@@ -699,11 +728,18 @@ def generate_multi_page_site(
     stale services.html sitting in the folder for deploy_site to push
     alongside the new set.
 
-    Fails fast — if any page throws, the exception propagates and NOTHING
-    gets deployed. A partial multi-page site would ship a nav bar with dead
-    links, which is worse than no site at all for that build.
+    Still fails fast in the sense that matters — if any page's call raises,
+    the exception propagates and NOTHING gets deployed, so a nav bar with
+    dead links never ships. What concurrency gives up is stopping EARLY: all
+    planned pages are already in flight by the time one of them fails, so a
+    failure no longer saves the cost of the pages behind it in the old
+    sequential order. That's the trade for not letting one slow page hold up
+    every page after it — the failure case was already the expensive,
+    refunded path; this just also makes the success case (the overwhelming
+    majority) 2-4x faster instead of piling every page's latency in series.
 
-    Returns {slug: absolute_file_path}.
+    Returns {slug: absolute_file_path}, files written in `pages_plan`'s
+    order regardless of which page's Claude call actually finished first.
     """
     import shutil
 
@@ -716,8 +752,7 @@ def generate_multi_page_site(
 
     widget_html = _build_chat_widget(intel)
 
-    site_paths = {}
-    for page in pages_plan:
+    def _build_one(page: dict) -> str:
         print(f"  [generator] Generating page '{page['title']}' ({page['filename']}) for {intel['business_name']}...")
         html = generate_page(intel, design, page, pages_plan, notes, r6)
         html = _inject_base_href(html, prospect_id)
@@ -726,10 +761,39 @@ def generate_multi_page_site(
             html = html.replace("</body>", widget_html + "\n</body>")
         else:
             html += widget_html
+        return html
 
+    # Bounded, not "however many pages_plan happens to hold" — pages.py's own
+    # MAX_PAGES is separately env-overridable, and this cap is what stops a
+    # future bump there from silently turning into an unbounded burst of
+    # concurrent requests against Anthropic.
+    max_workers = max(1, min(PAGE_GENERATION_CONCURRENCY, len(pages_plan)))
+    html_by_slug: dict[str, str] = {}
+    first_error: Exception | None = None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_build_one, page): page for page in pages_plan}
+        # ThreadPoolExecutor's own __exit__ blocks until every submitted call
+        # finishes regardless — a raised in-flight Claude call cannot be
+        # cancelled, so this loop draining as_completed just makes that wait
+        # explicit and lets every page's own error surface (not just the
+        # first one observed) instead of only the one __exit__ happens to hit.
+        for future in concurrent.futures.as_completed(futures):
+            page = futures[future]
+            try:
+                html_by_slug[page["slug"]] = future.result()
+            except Exception as e:
+                print(f"  [generator] page '{page['title']}' ({page['filename']}) failed: {e}")
+                if first_error is None:
+                    first_error = e
+
+    if first_error is not None:
+        raise first_error
+
+    site_paths = {}
+    for page in pages_plan:
         file_path = os.path.join(site_dir, page["filename"])
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write(html)
+            f.write(html_by_slug[page["slug"]])
         site_paths[page["slug"]] = file_path
 
     print(f"  [generator] ✓ {len(site_paths)}-page V2 site saved to {site_dir}")

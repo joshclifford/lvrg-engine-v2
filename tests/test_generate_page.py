@@ -63,7 +63,7 @@ def _mock_client(captured, html="<!DOCTYPE html><html><head></head><body>hi</bod
 
 def test_prompt_lists_every_other_page_and_marks_active(monkeypatch):
     captured = []
-    monkeypatch.setattr(generator, "_get_client", lambda: _mock_client(captured))
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
     design = generator._get_design_personality("other")
     nav = _nav_plan()
@@ -81,7 +81,7 @@ def test_prompt_lists_every_other_page_and_marks_active(monkeypatch):
 
 def test_design_text_appears_verbatim_in_prompt(monkeypatch):
     captured = []
-    monkeypatch.setattr(generator, "_get_client", lambda: _mock_client(captured))
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
     design = generator._get_design_personality("bar")
     nav = _nav_plan()
@@ -94,7 +94,7 @@ def test_design_text_appears_verbatim_in_prompt(monkeypatch):
 
 def test_relative_links_instructed_not_absolute(monkeypatch):
     captured = []
-    monkeypatch.setattr(generator, "_get_client", lambda: _mock_client(captured))
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
     design = generator._get_design_personality("other")
     nav = _nav_plan()
@@ -107,7 +107,7 @@ def test_relative_links_instructed_not_absolute(monkeypatch):
 
 def test_returns_html_string_does_not_write_to_disk(monkeypatch, tmp_path):
     captured = []
-    monkeypatch.setattr(generator, "_get_client", lambda: _mock_client(captured))
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
     design = generator._get_design_personality("other")
     nav = _nav_plan()
@@ -121,7 +121,7 @@ def test_returns_html_string_does_not_write_to_disk(monkeypatch, tmp_path):
 
 def test_page_max_tokens_used_not_site_max_tokens(monkeypatch):
     captured = []
-    monkeypatch.setattr(generator, "_get_client", lambda: _mock_client(captured))
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
     design = generator._get_design_personality("other")
     nav = _nav_plan()

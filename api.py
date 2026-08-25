@@ -264,9 +264,12 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
     # and reading an unassigned local from a closure is an UnboundLocalError,
     # which would lose the callback entirely at the moment it matters.
     grade_for_callback = None
+    # Set before _build_and_report runs (plan_pages is fast/local, done on the
+    # event loop) so the worker thread below can read it as a closure.
+    pages_plan = None
     callback_sent = False
-    # Two threads can reach the callback: the deploy worker (see
-    # _deploy_and_report) and the generator's own `finally`. The lock makes
+    # Two threads can reach the callback: the build worker (see
+    # _build_and_report) and the generator's own `finally`. The lock makes
     # "first one wins" actually true instead of probably true.
     callback_lock = threading.Lock()
 
@@ -319,47 +322,91 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
                 error=pipeline_error or deploy_error or "Site generated but deploy failed.",
             )
 
-    def _deploy_and_report(prospect_id: str, site_dir: str) -> str:
-        """Deploy, then report the outcome — both inside ONE worker thread.
+    def _build_and_report(prospect_id: str):
+        """Generate (single- or multi-page) AND deploy AND report the outcome
+        — all three inside ONE worker thread.
 
-        WHY THIS SHAPE (17 Aug 2026): `deploy_site` used to be awaited on its own
-        and the callback sent afterwards by the generator. A client disconnect
-        cancels that await, but it CANNOT cancel the thread already running
-        inside it — Python has no way to kill a running thread. So the push
-        completed, GitHub Pages was polled, the URL was returned... to a
-        coroutine that no longer existed. The result was discarded and the
-        generator reported `failed` for a site that was live.
+        WHY THIS SHAPE, WIDENED FROM DEPLOY-ONLY (24 Aug 2026): this used to
+        wrap deploy_site alone, because deploy was the one step slow enough
+        to routinely outlive a caller that had already given up (17 Aug —
+        see the git history on this function). That stopped being true once
+        multi-page builds shipped: generating up to
+        PAGE_GENERATION_CONCURRENCY pages is now often the slower half, and
+        it used to run as a bare `await run_in_executor(generate_..., ...)`
+        with no self-report of its own.
 
-        Putting the report in the same thread as the work is what fixes it: the
+        A client disconnect cancels that await, but — same as deploy — it
+        CANNOT cancel the thread already running inside it. So the pages
+        kept generating in the background, `finally` ran immediately with
+        nothing to report yet (an honestly unknown outcome, correctly left
+        silent — see _send_callback_once), and when generation finished
+        there was no code path left that would ever call deploy_site or
+        send a callback: the coroutine that was going to do both had already
+        been torn down. The site was fully generated, on disk, in a
+        container that will eventually recycle it — and never went live,
+        never got reported, never refunded until the 15-minute reaper caught
+        it. Real generated work, thrown away, silently.
+
+        Putting generation, deploy, AND the report in the same thread closes
+        that the same way the 17 Aug fix closed it for deploy alone: the
         thread runs to completion regardless of who is still listening, so
-        whatever it observes is what gets reported. Its return value is still
-        awaited for the SSE stream, but nothing depends on that await surviving.
+        whatever it observes is what gets reported. Its return value is
+        still awaited for the SSE stream, but nothing depends on that await
+        surviving.
+
+        Deploy failure stays non-fatal here (mirrors the prior "Deploy
+        failed: ... — continuing" behavior) so a generated-but-undeployed
+        site still gets its outreach email drafted downstream. A GENERATION
+        failure has no site to deploy and nothing to email about, so it
+        propagates and ends the build — same as before this change.
         """
-        nonlocal callback_sent
-        url = deploy_site(prospect_id, site_dir)
+        nonlocal callback_sent, deploy_error
+        if multi_page:
+            paths = generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6)
+            site_dir_local = os.path.dirname(next(iter(paths.values())))
+        else:
+            paths = None
+            site_dir_local = generate_site(intel, prospect_id, notes, r6)
+
+        if no_deploy:
+            return f"[local] {site_dir_local}/index.html", paths
+
+        try:
+            url = deploy_site(prospect_id, site_dir_local)
+        except Exception as e:
+            # Known, proven failure — unlike a cancelled await, this is safe
+            # to record even though nothing here reports it directly; the
+            # generator's own `finally` reports it IF the caller is still
+            # connected (same as always). If the caller has already gone,
+            # this is the one gap this change does not additionally close —
+            # deploy failing specifically in that window was already
+            # unreported before today, and the reaper is the existing
+            # backstop for it, same as it always was.
+            deploy_error = f"Deploy failed: {e}"
+            return None, paths
+
         # Claim the callback before sending so the generator's `finally` cannot
         # also fire. Belt and braces — `finally` already declines to report an
         # unknown outcome — but this is the ordering that matters most, because
         # `smart-site-callback` only transitions a row out of `building` once:
         # whichever report lands first wins, and a wrong one cannot be undone.
-        if not no_deploy:
-            with callback_lock:
-                already = callback_sent
-                callback_sent = True
-            if not already:
-                # The claim above happens BEFORE this call, so a throw here would
-                # consume the callback and leave `finally` unable to retry.
-                # _post_build_callback is documented never to raise, but relying
-                # on that silently is how a report gets lost at the one moment it
-                # matters — so make the failure loud. The 5-minute reaper is the
-                # backstop if it ever fires.
-                try:
-                    _post_build_callback(callback_url, callback_secret, lead_id, "ready",
-                                         preview_url=url, grade=grade_for_callback)
-                except Exception as _e:
-                    print(f"  [callback] FAILED to report ready for lead {lead_id}: {_e} — "
-                          f"the site IS live at {url}; the reaper will fail+refund it wrongly")
-        return url
+        with callback_lock:
+            already = callback_sent
+            callback_sent = True
+        if not already:
+            # The claim above happens BEFORE this call, so a throw here would
+            # consume the callback and leave `finally` unable to retry.
+            # _post_build_callback is documented never to raise, but relying
+            # on that silently is how a report gets lost at the one moment it
+            # matters — so make the failure loud. The 5-minute reaper is the
+            # backstop if it ever fires.
+            try:
+                _post_build_callback(callback_url, callback_secret, lead_id, "ready",
+                                     preview_url=url, grade=grade_for_callback)
+            except Exception as _e:
+                print(f"  [callback] FAILED to report ready for lead {lead_id}: {_e} — "
+                      f"the site IS live at {url}; the reaper will fail+refund it wrongly")
+        return url, paths
 
     try:
         # ── Step 0: Fetch queue contact data (Scout may have found email/phone) ──
@@ -400,7 +447,7 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         if not grade["worth_targeting"]:
             yield sse("log", text=f"Score {grade['total']}/10 — noted, building anyway", level="info")
 
-        # ── Step 3: Generate site ────────────────────────────────────
+        # ── Step 3 + 4: Generate (single- or multi-page) AND deploy ───
         # page_url keeps two sub-businesses on one domain from sharing a preview
         # folder and overwriting each other's live page (POD01-34). Empty for a
         # root-domain lead, which yields the identical slug to before.
@@ -412,40 +459,33 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         if r6:
             yield sse("log", text="Grounding copy in R6 audit's weakest pillar", level="info")
 
-        site_paths = None
         if multi_page:
             pages_plan = plan_pages(intel)
             yield sse("log", text=f"Planned {len(pages_plan)} pages: {', '.join(p['title'] for p in pages_plan)}", level="info")
-            site_paths = await loop.run_in_executor(None, generate_multi_page_site, intel, prospect_id, pages_plan, notes, r6)
-            # Derived from an actual returned path rather than importing
-            # SITES_DIR here — one less place that has to agree on where the
-            # engine writes its output.
-            site_dir = os.path.dirname(next(iter(site_paths.values())))
-        else:
-            site_dir = await loop.run_in_executor(None, generate_site, intel, prospect_id, notes, r6)
-        yield sse("log", text="Site generated", level="success")
-
-        # ── Step 4: Deploy ───────────────────────────────────────────
-        preview_url = None
         if not no_deploy:
             yield sse("log", text="Deploying to GitHub Pages...", level="info")
-            try:
-                # _deploy_and_report, not deploy_site: the thread reports the
-                # outcome itself, so a caller that has already given up cannot
-                # cause a live site to be recorded as failed.
-                preview_url = await loop.run_in_executor(None, _deploy_and_report, prospect_id, site_dir)
-                yield sse("log", text=f"Live at {preview_url}", level="success")
-            except Exception as e:
-                yield sse("log", text=f"Deploy failed: {e} — continuing", level="error")
-                preview_url = None
-                # Record it: a CAUGHT exception is a proven failure, and without
-                # this the callback would classify it as "unknown" and stay
-                # silent, leaving the lead to be reaped 15 minutes later instead
-                # of failing immediately. CancelledError never lands here — it is
-                # a BaseException — which is exactly the discrimination we want.
-                deploy_error = f"Deploy failed: {e}"
-        else:
-            preview_url = f"[local] {site_dir}/index.html"
+
+        # _build_and_report, not separate generate/deploy awaits: generation
+        # and deploy now run inside ONE worker thread that reports its own
+        # outcome, so a caller that has already given up — whether generation
+        # or deploy was what it was waiting on — cannot cause a site that
+        # finishes after it left to go unreported. See _build_and_report's
+        # docstring for the incident this closes.
+        preview_url, site_paths = await loop.run_in_executor(None, _build_and_report, prospect_id)
+        # Reaching this line means generation succeeded — an exception from
+        # inside _build_and_report's generation half would have skipped past
+        # it to the `except` below. Kept as its own log line (rather than
+        # folded into "Live at ...") because smoke_test.sh greps for this
+        # exact text to confirm Claude generation happened independently of
+        # deploy, which no_deploy=true smoke runs skip entirely.
+        yield sse("log", text="Site generated", level="success")
+        if preview_url:
+            yield sse("log", text=f"Live at {preview_url}", level="success")
+        elif deploy_error:
+            # Generation succeeded, deploy did not — non-fatal, matching the
+            # prior behavior: still write outreach email below rather than
+            # discard a generated-but-undeployed site's context entirely.
+            yield sse("log", text=f"{deploy_error} — continuing", level="error")
 
         # ── Step 5: Generate email ───────────────────────────────────
         yield sse("log", text="Writing outreach messaging...", level="info")
