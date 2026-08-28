@@ -176,11 +176,28 @@ def _as_count(value) -> int | None:
 
 
 def _build_chat_widget(intel: dict) -> str:
-    """Build the chat widget HTML — injected programmatically after Claude generates the site."""
+    """GHL (LeadConnector) chat widget — injected into every generated page.
+
+    The agent itself is built and trained in GoHighLevel, so `intel` is no longer
+    read here. The parameter stays so both call sites (single-page and
+    multi-page) keep working untouched.
+    """
+    return """
+<!-- GHL Chat Widget -->
+<script src="https://widgets.leadconnectorhq.com/loader.js" data-resources-url="https://widgets.leadconnectorhq.com/chat-widget/loader.js" data-widget-id="6a906f149f17bc64b3a4a640"></script>
+"""
+
+
+def _build_chat_widget_legacy(intel: dict) -> str:
+    """Previous self-hosted widget. Kept for reference / rollback — not called.
+
+    Still relevant because already-deployed previews embed this markup and hit
+    the Railway /chat endpoint, so that endpoint must stay alive.
+    """
     business_name = intel.get("business_name", "this business")
     persona = intel.get("chat_persona", f"Friendly assistant for {business_name}")
     primary_color = intel.get("primary_color", "#f59e0b")
-    
+
     return f"""
 <!-- LVRG AI Chat Widget -->
 <style>
