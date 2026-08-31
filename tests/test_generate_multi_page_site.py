@@ -134,7 +134,7 @@ def test_chat_widget_and_base_href_injected_into_every_page(monkeypatch, tmp_pat
     for path in site_paths.values():
         with open(path, "r", encoding="utf-8") as f:
             html = f.read()
-        assert 'id="lvrg-chat-btn"' in html
+        assert 'leadconnectorhq.com' in html  # GHL widget (6235ccd), not the retired self-hosted one
         assert '<base href="/preview/acme-com/">' in html
 
 
