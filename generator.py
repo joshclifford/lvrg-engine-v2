@@ -726,6 +726,150 @@ Start with <!DOCTYPE html>"""
     return html
 
 
+# ── Get Listed / Sponsored Story lead magnets ───────────────────────────────
+# Reuse the exact scrape → AI-mockup → gotheresandiego.com → chat-widget
+# pipeline the Free Website magnet already proves out. Only the prompt
+# content differs — no new hosting, deploy, or widget work needed. See
+# project_aug31_sponsored_story_and_get_listed_build_plan (PM memory) for
+# why these two exist and why they're built this way.
+#
+# Both offers are already fully priced/positioned in TSD's own docs
+# (docs/TSD-Docs/client-originals/campaign-get-listed.md,
+# campaign-advertising.md) — this only builds the per-prospect MOCKUP,
+# which neither doc described, not the offer itself.
+
+GET_LISTED_VERTICAL_FRAMING = {
+    "realtor": (
+        "a real estate agent",
+        "their current listings, their neighborhoods of focus, and their track record",
+    ),
+    "contractor": (
+        "an independent contractor",
+        "their trade specialty, past project photos, and service area",
+    ),
+}
+
+
+def generate_offer_lead_magnet_page(
+    offer: str,
+    intel: dict,
+    vertical: Optional[str] = None,
+) -> str:
+    """Generate a single-page mockup for the Get Listed or Sponsored Story
+    lead magnet. `offer` is "get_listed" or "sponsored_story". `vertical`
+    only applies to get_listed today ("realtor" or "contractor", per Josh's
+    own examples on the 27 Aug call) — defaults to a generic framing when
+    omitted or unrecognized, so an unknown vertical degrades gracefully
+    instead of failing the build.
+
+    Mirrors generate_page's shape (same photo/reviews/press/social blocks,
+    same Tailwind/CDN tech stack, same claim-bar + nav + footer structure)
+    so a lead magnet built here looks like it belongs next to a Free
+    Website preview, not a different product. The chat widget is injected
+    separately by the caller, same as every other generated page.
+    """
+    photo_block = _build_photo_block(intel)
+    reviews_block = _build_reviews_block(intel)
+    press_block = _build_press_block(intel)
+    social_block = _build_social_block(intel)
+
+    if offer == "get_listed":
+        role, detail_hint = GET_LISTED_VERTICAL_FRAMING.get(
+            vertical, ("a local business", "their services and what makes them worth choosing")
+        )
+        page_purpose = f"""This is a MOCK-UP of how {intel['business_name']} — {role} — would look
+featured in the ThereSanDiego.com business directory, as a personalized preview to close a
+Get Listed ($297 one-time, permanent profile) prospect. Build it around {detail_hint}.
+
+STRUCTURE (this is a directory profile mock-up, not a full website):
+1. CLAIM BAR — sticky, same as every LVRG preview:
+   "This is a preview of your ThereSanDiego.com listing" + gold pill "Claim This Listing →" linking to {BOOKING_URL}
+2. PROFILE HEADER — business name, {role} framing, location/neighborhood, primary photo
+3. ABOUT — 2-3 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice
+4. WHY LIST HERE — 3 short points: permanent page (no monthly fee), SEO-optimized so San Diegans searching for what you offer find you, person+business schema (nobody else tells Google who you are as the person behind the business)
+5. GALLERY — real photos if provided, otherwise omit
+6. TESTIMONIALS — ONLY real review quotes provided, verbatim. If none, omit entirely.
+7. CTA — "Claim this listing for $297, one time, permanent" driving to {BOOKING_URL}
+8. FOOTER — location, phone, hours"""
+    elif offer == "sponsored_story":
+        page_purpose = f"""This is a MOCK-UP of a Sponsored Story: a short editorial feature as it would
+run on ThereSanDiego.com and get promoted to their 70,000+ monthly audience, built to close an
+Advertising prospect via the $197 First Look entry offer.
+
+STRUCTURE (this is an editorial feature mock-up, not a full website):
+1. CLAIM BAR — sticky, same as every LVRG preview:
+   "This is a preview of your Sponsored Story" + gold pill "Claim This Feature →" linking to {BOOKING_URL}
+2. ARTICLE HEADER — a real editorial-style headline about {intel['business_name']} (not a generic "About Us" title), byline "There San Diego Staff", hero photo if provided
+3. THE STORY — 3-4 short paragraphs written in ThereSanDiego's warm, locals-know-locals editorial voice, using their REAL description/services/neighborhood — this should read like a real feature article a San Diegan would actually enjoy reading, not an ad
+4. PULL QUOTE — one real review quote if provided, styled as an editorial pull-quote. If none, omit.
+5. GUARANTEE CALLOUT — "Every Sponsored Story comes with guaranteed impressions. If we don't hit the number, we keep promoting until we do." + "First Look: $197 one-time, puts you in front of the audience so you can see what it does."
+6. CTA — driving to {BOOKING_URL}
+7. FOOTER — location, phone, hours"""
+    else:
+        raise ValueError(f"Unknown offer for generate_offer_lead_magnet_page: {offer!r}")
+
+    page_prompt = f"""You are building a personalized lead-magnet PREVIEW PAGE for {intel['business_name']}.
+This is NOT a full business website — see the specific structure below for what it actually is.
+
+━━━ BUSINESS INTEL ━━━
+- Business: {intel['business_name']}
+- Type: {intel.get('business_type', 'other')}
+- Domain: {intel['domain']}
+- Description: {intel['description']}
+- Services: {', '.join(intel['services']) if intel['services'] else 'Not listed'}
+- Location: {intel['location']}
+- Neighborhood: {intel.get('neighborhood', '')}
+- Phone: {intel.get('phone', 'Not listed')}
+- Hours: {intel.get('hours', 'Not listed')}
+- Brand vibe: {intel.get('brand_vibe', 'clean, modern')}
+- Primary color: {intel.get('primary_color', '#333')}
+
+━━━ REAL CONTENT ━━━
+{photo_block}
+
+{reviews_block}
+
+{press_block}
+
+{social_block}
+
+━━━ TECH STACK ━━━
+Use Tailwind CSS via CDN — include this in <head>:
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = {{ theme: {{ extend: {{ colors: {{ brand: '{intel.get('primary_color','#f59e0b')}' }} }} }} }}</script>
+Use Google Fonts matching the brand vibe above.
+NO inline style= attributes. Use Tailwind classes exclusively.
+
+━━━ WHAT TO BUILD ━━━
+{page_purpose}
+
+━━━ COPY RULES ━━━
+- Reference {intel.get('neighborhood') or intel.get('location','').split(',')[0]} naturally
+- NEVER write fake testimonials — if no real reviews, skip quotes entirely
+- NEVER invent pricing beyond what's given above
+- Single page, no nav to other pages — this is a standalone lead magnet, not a multi-page site
+
+━━━ OUTPUT ━━━
+Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).
+Start with <!DOCTYPE html>"""
+
+    client = _get_client(max_retries=PAGE_GENERATION_MAX_RETRIES)
+    with client.messages.stream(
+        model="claude-opus-4-5",
+        max_tokens=PAGE_MAX_TOKENS,
+        messages=[{"role": "user", "content": page_prompt}],
+    ) as stream:
+        response = stream.get_final_message()
+
+    if response.stop_reason == "max_tokens":
+        print(f"  [generator] WARNING: hit max_tokens ({PAGE_MAX_TOKENS}) on a {offer} lead magnet for {intel['business_name']} — may be cut short")
+
+    html = response.content[0].text.strip()
+    html = _strip_markdown_fences(html)
+    html = _close_truncated_html(html)
+    return html
+
+
 def generate_multi_page_site(
     intel: dict,
     prospect_id: str,
