@@ -14,7 +14,14 @@ SENDER_EMAIL = "adam@mobiloptimismrade.com"
 SENDER_AGENCY = "LVRG Agency"
 SENDER_WEBSITE = "lvrg.com"
 SENDER_PHONE = "619.361.7484"
-BOOKING_URL = "https://theresandiego.com/advertise/"
+# The "Let's Chat" booking page. /advertise/ 302s to the funnel HOMEPAGE
+# (advertise.theresandiego.com/), which is a shop front, not a booking form —
+# the prospect lands on a price list instead of a calendar. This is the link
+# the campaigns were moved to; the engine was missed in that rollout, so every
+# published preview and every generated email still pointed at the old one.
+# Feeds the "Claim This Site" button on generated pages and the booking link
+# in the outreach email prompt.
+BOOKING_URL = "https://theresandiego.com/letschat"
 
 # GitHub Pages base URL for deployed previews
 GITHUB_USER = "joshclifford"
