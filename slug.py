@@ -43,8 +43,8 @@ def canonical_domain(domain: str) -> str:
     return d.rstrip(".")
 
 
-def make_slug(domain: str, page_url: str = "") -> str:
-    """Domain (+ optional sub-page) -> preview slug.
+def make_slug(domain: str, page_url: str = "", variant: str = "") -> str:
+    """Domain (+ optional sub-page, + optional variant) -> preview slug.
 
     Slugs the FULL domain, so foo.com and foo.net no longer collide on `foo`
     and silently overwrite each other's live preview. Matches the format the
@@ -57,9 +57,20 @@ def make_slug(domain: str, page_url: str = "") -> str:
     `page_url` distinguishes two businesses that share one domain (POD01-34).
     Without it, a charity's restaurant and its laundry arm both slug to
     `ateliers--atbs-fr` and the second build overwrites the first's live page.
-    A page_url with no path — or none at all — returns the domain-only slug
+
+    `variant` distinguishes two businesses that share one domain AND have no
+    distinguishing path — the branches of a chain. Every Better Buzz location
+    lists `betterbuzzcoffee.com`, so page_url is empty for all of them and they
+    all slug to `betterbuzzcoffee-com`. Building the second one silently
+    replaced the first's live page, after that link had already been emailed.
+    The caller passes something that differs per branch (the business name, which
+    Google already qualifies by location).
+
+    Both suffixes are OPTIONAL and omitting them returns the domain-only slug
     BYTE-IDENTICALLY, so no existing preview is orphaned and root-domain leads
-    behave exactly as they do today.
+    behave exactly as they do today. That property is what lets the caller give
+    the suffix only to the branch that has no live page yet, leaving the one
+    already in a prospect's inbox untouched.
     """
     # One canonicaliser, shared with everything that has to agree on what "the
     # same domain" means. Inlining a second copy of these rules is how three
@@ -120,6 +131,22 @@ def make_slug(domain: str, page_url: str = "") -> str:
     if path_slug:
         s = f"{s}{BOUNDARY}{path_slug}"
 
+    # ── Variant suffix ───────────────────────────────────────────────────────
+    #
+    # Appended with the same boundary, so a slug carrying both reads
+    # `domain---path---variant`. Still unambiguously splittable: no fragment can
+    # contain `---` (see the reasoning above), so every `---` is a boundary.
+    #
+    # The variant fragment shares a NAMESPACE with the path fragment — both sit
+    # after a `---` — so a readable variant alone is not safe. A branch named
+    # "Hillcrest" and a sibling page at `/hillcrest` would both yield
+    # `betterbuzzcoffee-com---hillcrest`: the exact overwrite this argument
+    # exists to prevent, reintroduced one level down. `_variant_slug` therefore
+    # ALWAYS carries a digest, which a faithful path fragment never does.
+    variant_slug = _variant_slug(variant, page_url, MAX_SLUG_CHARS - len(s) - len(BOUNDARY))
+    if variant_slug:
+        s = f"{s}{BOUNDARY}{variant_slug}"
+
     return s
 
 
@@ -154,6 +181,59 @@ def _unslug_path(readable: str) -> str:
     holder = "\x00"
     parts = readable.replace("--", holder).split("-")
     return "/".join(p.replace(holder, "-") for p in parts)
+
+
+def _variant_slug(variant: str, page_url: str = "", budget: int = MAX_PATH_SLUG_CHARS) -> str:
+    """A caller-supplied discriminator as a slug fragment, or "" if absent.
+
+    For businesses that share a domain and have no distinguishing path — chain
+    branches. `variant` is whatever the caller knows differs; leadscraper sends
+    the business name, because Google already qualifies branches by location
+    ("Better Buzz Coffee Hillcrest").
+
+    ALWAYS carries a digest, unlike `_path_slug`, which drops it when the
+    readable form round-trips. Two reasons, and both are collisions this
+    function exists to prevent:
+
+      * It shares a namespace with the path fragment. A branch named "Hillcrest"
+        and a sibling page at `/hillcrest` both read as `hillcrest`, so a
+        readable-only variant could collide with a path on the same domain.
+        A faithful path fragment never carries a digest, so a digest here is
+        enough to separate the two namespaces for good.
+      * slugify is lossy the same way it is for paths — it folds case and
+        transliterates — so "Café Nord" and "Cafe Nord" read identically. The
+        digest is over the RAW variant, so they stay distinct.
+
+    The digest is salted with `page_url` so the same branch name under two
+    different sub-pages cannot converge either.
+    """
+    if not variant:
+        return ""
+    raw = variant.strip()
+    if not raw:
+        return ""
+
+    # NOT doubled, unlike the domain labels and path segments. Those are JOINED
+    # from several parts with a single `-`, so a literal hyphen inside a part has
+    # to be distinguishable from the join separator. A variant is one string with
+    # nothing to join, and slugify never emits `--`, so `---` is already
+    # unreachable here and doubling would only turn "Better Buzz Coffee
+    # Hillcrest" into `better--buzz--coffee--hillcrest` on a URL a prospect sees.
+    #
+    # Injectivity does not depend on the readable half anyway — the digest below
+    # is over the RAW variant, so "Better Buzz" and "Better-Buzz" stay distinct
+    # even though they slugify the same.
+    readable = slugify(raw)
+
+    digest = hashlib.sha1(f"{page_url}\x00{raw}".encode("utf-8")).hexdigest()[:6]
+    limit = min(MAX_PATH_SLUG_CHARS, budget)
+    head = readable[: max(0, limit - DIGEST_CHARS)].strip("-")
+    if not head:
+        # No room for anything readable, or the variant slugified to nothing at
+        # all (punctuation only). The digest alone still identifies it uniquely,
+        # which is the property that actually matters.
+        return digest
+    return f"{head}-{digest}"
 
 
 def _path_slug(page_url: str, budget: int = MAX_PATH_SLUG_CHARS) -> str:

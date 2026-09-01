@@ -250,3 +250,106 @@ def test_domain_only_slug_never_contains_the_boundary():
     for d in ["foo-bar.com", "a-b.com", "münchen.de", "a.b.c.com",
               "shop-dental.co.uk", "www.www.acme.com", "x--y.com"]:
         assert "---" not in make_slug(d), d
+
+
+# ── variant: chain branches sharing one domain ───────────────────────────────
+#
+# Every Better Buzz location lists betterbuzzcoffee.com and none of them has a
+# distinguishing path, so all of them slugged to `betterbuzzcoffee-com` and the
+# second build silently replaced the first's live page — after that link had
+# already been emailed. `variant` is the caller's discriminator.
+
+
+def test_no_variant_is_byte_identical():
+    """The regression guard for every preview already published.
+
+    Nothing may move for a lead that does not pass a variant, or links sitting
+    in prospects' inboxes start 404ing.
+    """
+    for d in ["acmedental.com", "foo-bar.com", "münchen.de", "www.acme.com"]:
+        assert make_slug(d, "", "") == make_slug(d)
+        assert make_slug(d, "", None or "") == make_slug(d)
+    # With a path, too — the variant is appended after it, not instead of it.
+    assert (make_slug("ateliers-atbs.fr", "https://ateliers-atbs.fr/restauration", "")
+            == make_slug("ateliers-atbs.fr", "https://ateliers-atbs.fr/restauration"))
+
+
+def test_two_branches_of_one_chain_do_not_collide():
+    """The bug this argument exists for."""
+    a = make_slug("betterbuzzcoffee.com", "", "Better Buzz Coffee Hillcrest")
+    b = make_slug("betterbuzzcoffee.com", "", "Better Buzz Coffee Mission Gorge & Zion")
+    assert a != b
+    assert a.startswith("betterbuzzcoffee-com---")
+    assert b.startswith("betterbuzzcoffee-com---")
+
+
+def test_variant_never_collides_with_a_path_of_the_same_name():
+    """Both suffixes share one namespace, so a readable variant is not enough.
+
+    A branch called "Hillcrest" and a sibling page at `/hillcrest` would both
+    render `betterbuzzcoffee-com---hillcrest` — the same overwrite, one level
+    down. The variant always carries a digest; a faithful path never does.
+    """
+    as_path = make_slug("betterbuzzcoffee.com", "https://betterbuzzcoffee.com/hillcrest")
+    as_variant = make_slug("betterbuzzcoffee.com", "", "Hillcrest")
+    assert as_path != as_variant
+    assert as_path == "betterbuzzcoffee-com---hillcrest"
+
+
+def test_variant_survives_lossy_slugification():
+    """slugify folds case and transliterates, so the digest is over the raw text."""
+    assert make_slug("acme.com", "", "Café Nord") != make_slug("acme.com", "", "Cafe Nord")
+    assert make_slug("acme.com", "", "Hillcrest") != make_slug("acme.com", "", "hillcrest")
+
+
+def test_variant_composes_with_a_path():
+    """A sub-page business that is ALSO one of several branches."""
+    base = "https://ateliers-atbs.fr/restauration"
+    a = make_slug("ateliers-atbs.fr", base, "Nord")
+    b = make_slug("ateliers-atbs.fr", base, "Sud")
+    path_only = make_slug("ateliers-atbs.fr", base)
+    assert a != b != path_only and a != path_only
+    # domain---path---variant: every `---` is a boundary, so it stays splittable.
+    assert a.count("---") == 2
+
+
+def test_same_variant_under_different_paths_stays_distinct():
+    """The digest is salted with page_url, so "Nord" twice is still two folders."""
+    a = make_slug("acme.com", "https://acme.com/restaurant", "Nord")
+    b = make_slug("acme.com", "https://acme.com/laundry", "Nord")
+    assert a != b
+
+
+def test_variant_respects_the_128_char_ceiling():
+    """serve-smart-site 400s past 128, on a link that has already been sent."""
+    long_domain = "-".join(["averylongbusinessname"] * 3) + ".example.co.uk"
+    for v in ["Nord", "A" * 200, "Mission Gorge & Zion — Second Floor, Suite 400"]:
+        s = make_slug(long_domain, f"https://{long_domain}/departments/cardiology", v)
+        assert len(s) <= 128, f"{len(s)} chars for {v!r}: {s}"
+
+
+def test_punctuation_only_variant_still_discriminates():
+    """slugify("!!!") is empty, so the readable half vanishes — the digest cannot."""
+    a = make_slug("acme.com", "", "!!!")
+    b = make_slug("acme.com", "", "???")
+    assert a != b
+    assert a != make_slug("acme.com")
+
+
+def test_variant_fragment_never_contains_the_boundary():
+    """`---` must stay unambiguous even though the variant is not hyphen-doubled.
+
+    slugify collapses any run of separators, so its output holds no `--` at all.
+    Doubling would only make a URL a prospect sees uglier.
+    """
+    for v in ["Better Buzz Coffee Hillcrest", "A - B", "a--b", "  spaced  out  ",
+              "Mission Gorge & Zion", "Café — Nord", "x---y"]:
+        s = make_slug("acme.com", "", v)
+        assert s.count("---") == 1, f"{v!r} -> {s}"
+
+
+def test_variant_differing_only_by_punctuation_stays_distinct():
+    """The digest is over the raw text, so the readable half may collapse."""
+    a = make_slug("acme.com", "", "Better Buzz")
+    b = make_slug("acme.com", "", "Better-Buzz")
+    assert a != b
