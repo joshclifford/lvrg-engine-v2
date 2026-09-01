@@ -142,6 +142,13 @@ def _post_build_callback(
         print(f"  [callback] failed to report {status} for lead {lead_id}: {e}")
 
 
+# The variant lands in the slug, and serve-smart-site rejects anything over 128
+# characters — a longer slug deploys fine and then 400s on a link already sent.
+# The slug builder budgets its own suffix too; this just stops an absurd value
+# arriving in the first place.
+MAX_VARIANT_CHARS = 60
+
+
 class BuildRequest(BaseModel):
     domain: str
     no_deploy: bool = False
@@ -158,6 +165,13 @@ class BuildRequest(BaseModel):
     # (POD01-34). Additive and same-host-only — see the check in /build. Empty
     # means "scrape the root", which is exactly what every caller did before.
     page_url: str = ""
+    # Distinguishes branches of a chain, which share one domain and have no
+    # distinguishing path — every Better Buzz lists betterbuzzcoffee.com, so all
+    # of them slugged to `betterbuzzcoffee-com` and the second build replaced the
+    # first's live page. leadscraper sends the business name, and only for a
+    # lead that has no published preview yet, so nothing already emailed moves.
+    # Additive: empty gives the identical slug to before.
+    variant: str = ""
     # Known facts the caller already holds. leadscraper enriches every lead via
     # Apify + Hunter, so it has the phone, email, address, socials and a real
     # Google rating before the engine starts. Re-deriving them from a scrape is
@@ -231,7 +245,7 @@ def _merge_known(intel: dict, known: dict) -> list:
     return used
 
 
-async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "", page_url: str = "", multi_page: bool = False) -> AsyncGenerator[str, None]:
+async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "", page_url: str = "", multi_page: bool = False, variant: str = "") -> AsyncGenerator[str, None]:
     """Run the full engine pipeline, yielding SSE events."""
 
     loop = asyncio.get_event_loop()
@@ -449,9 +463,11 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
 
         # ── Step 3 + 4: Generate (single- or multi-page) AND deploy ───
         # page_url keeps two sub-businesses on one domain from sharing a preview
-        # folder and overwriting each other's live page (POD01-34). Empty for a
-        # root-domain lead, which yields the identical slug to before.
-        prospect_id = make_slug(domain, page_url)
+        # folder and overwriting each other's live page (POD01-34); variant does
+        # the same for chain branches, which share a domain AND have no path.
+        # Both empty for an ordinary root-domain lead, which yields the identical
+        # slug to before.
+        prospect_id = make_slug(domain, page_url, variant)
 
         yield sse("log", text="Generating Smart Site with Claude...", level="info")
         if notes:
@@ -615,9 +631,15 @@ async def build(req: BuildRequest):
         print(f"  [build] ignoring page_url — host does not match domain {domain}")
         page_url = ""
 
+    # Unlike page_url there is nothing to validate against the domain: variant is
+    # a folder-name discriminator only, never fetched. Trimmed and length-capped
+    # because it lands in the slug, which serve-smart-site rejects over 128 chars.
+    variant = (req.variant or "").strip()[:MAX_VARIANT_CHARS]
+
     return StreamingResponse(
         run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes, req.known, req.r6,
-                     req.lead_id, req.callback_url, req.callback_secret, page_url, req.multi_page),
+                     req.lead_id, req.callback_url, req.callback_secret, page_url, req.multi_page,
+                     variant),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
