@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # Engine modules
+import cost
 from intel import scrape_site, grade_site
 from generator import generate_site, generate_multi_page_site, generate_email
 from pages import plan_pages
@@ -87,6 +88,7 @@ def _post_build_callback(
     preview_url: str = None,
     error: str = None,
     grade: dict = None,
+    ai_cost: dict = None,
 ) -> None:
     """Tell the caller how the build actually ended.
 
@@ -124,6 +126,14 @@ def _post_build_callback(
             if isinstance(total, (int, float)):
                 payload["grade"] = total
             payload["grade_breakdown"] = grade
+        # What this build cost us at Anthropic, in US cents. Additive: a
+        # receiver that predates it simply ignores the key, and lm-tool passes
+        # no callback_url at all so it never sends one.
+        if isinstance(ai_cost, dict):
+            total_cents = ai_cost.get("total_cents")
+            if isinstance(total_cents, (int, float)):
+                payload["ai_cost_cents"] = total_cents
+            payload["ai_cost_breakdown"] = ai_cost
         req = urllib.request.Request(
             callback_url,
             data=json.dumps(payload).encode(),
@@ -281,6 +291,14 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
     # Set before _build_and_report runs (plan_pages is fast/local, done on the
     # event loop) so the worker thread below can read it as a closure.
     pages_plan = None
+    # What this build spent at Anthropic. Lives out here for the same reason as
+    # everything else in this block: the callback fires from `finally`, and on a
+    # caller timeout that is the ONLY thing that still reports — a meter scoped
+    # inside the try would be unreadable exactly when the number matters. One
+    # per pipeline run, never module-level: builds run concurrently and
+    # multi-page generation fans out further, so a shared meter would bill one
+    # prospect's pages to another.
+    meter = cost.CostMeter()
     callback_sent = False
     # Two threads can reach the callback: the build worker (see
     # _build_and_report) and the generator's own `finally`. The lock makes
@@ -327,13 +345,19 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
                       f"leaving it `building` for the reaper, not reporting failed")
                 return
             callback_sent = True
+        # The spend is reported on BOTH outcomes. A failed build still burned
+        # every token it spent before it died, and a COGS dashboard that only
+        # counts successes understates what the feature actually costs.
+        ai_cost = meter.summary()
         if preview_url:
             _post_build_callback(callback_url, callback_secret, lead_id, "ready",
-                                 preview_url=preview_url, grade=grade_for_callback)
+                                 preview_url=preview_url, grade=grade_for_callback,
+                                 ai_cost=ai_cost)
         else:
             _post_build_callback(
                 callback_url, callback_secret, lead_id, "failed",
                 error=pipeline_error or deploy_error or "Site generated but deploy failed.",
+                ai_cost=ai_cost,
             )
 
     def _build_and_report(prospect_id: str):
@@ -376,11 +400,11 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         """
         nonlocal callback_sent, deploy_error
         if multi_page:
-            paths = generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6)
+            paths = generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6, meter=meter)
             site_dir_local = os.path.dirname(next(iter(paths.values())))
         else:
             paths = None
-            site_dir_local = generate_site(intel, prospect_id, notes, r6)
+            site_dir_local = generate_site(intel, prospect_id, notes, r6, meter=meter)
 
         if no_deploy:
             return f"[local] {site_dir_local}/index.html", paths
@@ -438,7 +462,12 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
 
         # ── Step 1: Intel ────────────────────────────────────────────
         yield sse("log", text=f"Reading {domain}...", level="info")
-        intel = await loop.run_in_executor(None, scrape_site, domain, page_url)
+        # lambda, not positional args: run_in_executor cannot forward kwargs,
+        # and `meter` has to arrive as one so every other caller of scrape_site
+        # (lm-tool, run_engine.py, the tests) keeps its existing signature.
+        intel = await loop.run_in_executor(
+            None, lambda: scrape_site(domain, page_url, meter=meter)
+        )
         # Prefer Scout-found email/phone over scraped (Scout finds real contact emails)
         if queue_contact.get("email"): intel["email"] = queue_contact["email"]
         if queue_contact.get("phone"): intel["phone"] = queue_contact["phone"]
@@ -505,7 +534,9 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
 
         # ── Step 5: Generate email ───────────────────────────────────
         yield sse("log", text="Writing outreach messaging...", level="info")
-        email_data = await loop.run_in_executor(None, generate_email, intel, grade, prospect_id, r6)
+        email_data = await loop.run_in_executor(
+            None, lambda: generate_email(intel, grade, prospect_id, r6, meter=meter)
+        )
         yield sse("log", text="Messaging ready", level="success")
 
         # ── Step 6: Save to Supabase (skip on no_deploy / smoke test runs) ──
@@ -553,11 +584,23 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         # NOTE: the outcome callback is NOT sent here. It fires from `finally`
         # below — see the comment there for why this is the only placement that
         # survives the case it exists to handle.
+        # Reported here AND on the callback, because the two paths are read by
+        # different writers: on a normal build leadscraper consumes this stream
+        # and writes the row itself, and the callback that follows is a no-op
+        # ("no longer building"). Only a build that outran the caller's wait is
+        # resolved by the callback. Sending the cost on just one of them would
+        # lose it for whichever path happened to win.
+        ai_cost = meter.summary()
+        print(f"  [cost] build spent {ai_cost['total_cents']:.4f} cents across "
+              f"{ai_cost['calls']} calls "
+              f"({ai_cost['input_tokens']} in / {ai_cost['output_tokens']} out)")
         result_payload = {
             "preview_url": preview_url,
             "email": email_data,
             "intel": intel,
             "grade": grade,
+            "ai_cost_cents": ai_cost["total_cents"],
+            "ai_cost_breakdown": ai_cost,
         }
         # Additive — `preview_url` stays the homepage either way, so any
         # existing consumer (leadscraper's smart_site_url column) needs no

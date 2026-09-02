@@ -96,7 +96,7 @@ def test_e6_extraction_input_never_exceeds_the_cap(monkeypatch, size):
 
     seen = {}
 
-    def fake_extract(domain, raw_text):
+    def fake_extract(domain, raw_text, meter=None):
         seen["len"] = len(raw_text)
         return {}
 
