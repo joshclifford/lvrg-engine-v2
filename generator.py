@@ -58,6 +58,20 @@ PAGE_GENERATION_CONCURRENCY = int(os.environ.get("PAGE_GENERATION_CONCURRENCY", 
 # the SDK default via a bare _get_client().
 PAGE_GENERATION_MAX_RETRIES = int(os.environ.get("PAGE_GENERATION_MAX_RETRIES", "5"))
 
+# Page generation does not deliberate — it transcribes a spec into HTML. There
+# is no reasoning step here worth paying for.
+#
+# This has to be explicit now. claude-opus-4-5 never thought unless asked, so
+# the calls below said nothing about it and got no thinking. claude-sonnet-5
+# runs ADAPTIVE THINKING BY DEFAULT, and thinking tokens bill at the OUTPUT
+# rate — the most expensive line on a build that is already ~90% output. The
+# first measured builds ran 25-29 cents with thinking silently on.
+#
+# Disabled rather than `effort: "low"` because low effort still thinks, just
+# less. If page quality drops, prefer {"type": "adaptive"} with
+# output_config={"effort": "low"} over going back to the default.
+NO_THINKING = {"type": "disabled"}
+
 
 def _get_client(max_retries: int = 2):
     # 2 is the anthropic SDK's own default — passed explicitly so callers that
@@ -518,6 +532,7 @@ Start with <!DOCTYPE html>"""
     # same object create() would have returned.
     with client.messages.stream(
         model="claude-sonnet-5",
+        thinking=NO_THINKING,
         max_tokens=SITE_MAX_TOKENS,
         messages=[{"role": "user", "content": site_prompt}],
     ) as stream:
@@ -722,6 +737,7 @@ Start with <!DOCTYPE html>"""
     client = _get_client(max_retries=PAGE_GENERATION_MAX_RETRIES)
     with client.messages.stream(
         model="claude-sonnet-5",
+        thinking=NO_THINKING,
         max_tokens=PAGE_MAX_TOKENS,
         messages=[{"role": "user", "content": page_prompt}],
     ) as stream:
@@ -868,6 +884,7 @@ Start with <!DOCTYPE html>"""
     client = _get_client(max_retries=PAGE_GENERATION_MAX_RETRIES)
     with client.messages.stream(
         model="claude-sonnet-5",
+        thinking=NO_THINKING,
         max_tokens=PAGE_MAX_TOKENS,
         messages=[{"role": "user", "content": page_prompt}],
     ) as stream:
@@ -1017,6 +1034,7 @@ Return as JSON:
     client = _get_client()
     response = client.messages.create(
         model="claude-sonnet-5",
+        thinking=NO_THINKING,
         max_tokens=1500,
         messages=[{"role": "user", "content": email_prompt}]
     )
