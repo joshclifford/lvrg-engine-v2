@@ -19,6 +19,7 @@ import re
 import anthropic
 from html import unescape as _unescape
 from urllib.parse import urljoin, urlparse, parse_qs
+import cost
 from config import INTEL_DIR
 
 def _get_client():
@@ -828,7 +829,7 @@ def fetch_press_mentions(business_name: str, location: str = "") -> list:
 EXTRACT_MAX_CHARS = int(os.environ.get("EXTRACT_MAX_CHARS", "60000"))
 
 
-def extract_intel_with_claude(domain: str, raw_text: str) -> dict:
+def extract_intel_with_claude(domain: str, raw_text: str, meter=None) -> dict:
     """Use Claude to extract structured intel from raw site content."""
     
     prompt = f"""Analyze this website content from {domain} and extract structured information.
@@ -866,7 +867,8 @@ Return ONLY valid JSON, no markdown, no explanation."""
         max_tokens=1500,
         messages=[{"role": "user", "content": prompt}]
     )
-    
+    cost.record(meter, "intel", "claude-haiku-4-5", response)
+
     raw = response.content[0].text.strip()
     if "```" in raw:
         raw = raw.split("```")[1]
@@ -887,7 +889,7 @@ Return ONLY valid JSON, no markdown, no explanation."""
 INTEL_BUDGET_SECONDS = int(os.environ.get("INTEL_BUDGET_SECONDS", "30"))
 
 
-def scrape_site(domain: str, page_url: str = "") -> dict:
+def scrape_site(domain: str, page_url: str = "", meter=None) -> dict:
     """Full intel gather for a prospect domain.
 
     `page_url` is the lead's OWN page when the caller has one — the full stored
@@ -944,7 +946,7 @@ def scrape_site(domain: str, page_url: str = "") -> dict:
     # to its default — which is the fabricated-business path the empty-scrape
     # guard above exists to block. An extraction failure must keep propagating
     # so the build fails cleanly and refunds. The cap is what makes it rare.
-    extracted = extract_intel_with_claude(domain, raw_text[:EXTRACT_MAX_CHARS])
+    extracted = extract_intel_with_claude(domain, raw_text[:EXTRACT_MAX_CHARS], meter=meter)
 
     business_name = extracted.get("business_name") or domain.split(".")[0].replace("-", " ").title()
     location = extracted.get("location", "")

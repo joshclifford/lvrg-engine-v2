@@ -16,6 +16,7 @@ import json
 from typing import Optional
 import anthropic
 
+import cost
 from config import SITES_DIR, BOOKING_URL, SENDER_NAME, SENDER_AGENCY
 
 # Ceiling for a generated page. This is a cap, not a target — most pages come in
@@ -404,8 +405,14 @@ def _close_truncated_html(html: str) -> str:
     return html
 
 
-def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[dict] = None) -> str:
-    """Generate a complete single-file HTML site for a prospect. Returns folder path."""
+def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[dict] = None,
+                  meter=None) -> str:
+    """Generate a complete single-file HTML site for a prospect. Returns folder path.
+
+    `meter` is an optional cost.CostMeter. Keyword-only in practice and
+    defaulting to None so lm-tool, run_engine.py and the tests — none of which
+    care what a build cost — call this exactly as they did before.
+    """
 
     print(f"  [generator] Generating V2 site for {intel['business_name']}...")
 
@@ -509,11 +516,12 @@ Start with <!DOCTYPE html>"""
     # without the request dying mid-generation. get_final_message() gives the
     # same object create() would have returned.
     with client.messages.stream(
-        model="claude-opus-4-5",
+        model="claude-sonnet-5",
         max_tokens=SITE_MAX_TOKENS,
         messages=[{"role": "user", "content": site_prompt}],
     ) as stream:
         response = stream.get_final_message()
+    cost.record(meter, "site", "claude-sonnet-5", response)
 
     if response.stop_reason == "max_tokens":
         print(f"  [generator] WARNING: hit max_tokens ({SITE_MAX_TOKENS}) — page may be cut short")
@@ -578,6 +586,7 @@ def generate_page(
     nav: list,
     notes: str = "",
     r6: Optional[dict] = None,
+    meter=None,
 ) -> str:
     """Generate ONE page of a multi-page site. Returns raw HTML — does not
     write to disk (generate_multi_page_site owns the filesystem). `design`
@@ -711,11 +720,12 @@ Start with <!DOCTYPE html>"""
 
     client = _get_client(max_retries=PAGE_GENERATION_MAX_RETRIES)
     with client.messages.stream(
-        model="claude-opus-4-5",
+        model="claude-sonnet-5",
         max_tokens=PAGE_MAX_TOKENS,
         messages=[{"role": "user", "content": page_prompt}],
     ) as stream:
         response = stream.get_final_message()
+    cost.record(meter, f"page:{page['slug']}", "claude-sonnet-5", response)
 
     if response.stop_reason == "max_tokens":
         print(f"  [generator] WARNING: hit max_tokens ({PAGE_MAX_TOKENS}) on page {page['filename']} — may be cut short")
@@ -754,6 +764,7 @@ def generate_offer_lead_magnet_page(
     offer: str,
     intel: dict,
     vertical: Optional[str] = None,
+    meter=None,
 ) -> str:
     """Generate a single-page mockup for the Get Listed or Sponsored Story
     lead magnet. `offer` is "get_listed" or "sponsored_story". `vertical`
@@ -855,11 +866,12 @@ Start with <!DOCTYPE html>"""
 
     client = _get_client(max_retries=PAGE_GENERATION_MAX_RETRIES)
     with client.messages.stream(
-        model="claude-opus-4-5",
+        model="claude-sonnet-5",
         max_tokens=PAGE_MAX_TOKENS,
         messages=[{"role": "user", "content": page_prompt}],
     ) as stream:
         response = stream.get_final_message()
+    cost.record(meter, f"offer_page:{offer}", "claude-sonnet-5", response)
 
     if response.stop_reason == "max_tokens":
         print(f"  [generator] WARNING: hit max_tokens ({PAGE_MAX_TOKENS}) on a {offer} lead magnet for {intel['business_name']} — may be cut short")
@@ -876,6 +888,7 @@ def generate_multi_page_site(
     pages_plan: list,
     notes: str = "",
     r6: Optional[dict] = None,
+    meter=None,
 ) -> dict:
     """Generate every planned page CONCURRENTLY, capped at
     PAGE_GENERATION_CONCURRENCY at a time (24 Aug 2026 — was strictly
@@ -915,7 +928,9 @@ def generate_multi_page_site(
 
     def _build_one(page: dict) -> str:
         print(f"  [generator] Generating page '{page['title']}' ({page['filename']}) for {intel['business_name']}...")
-        html = generate_page(intel, design, page, pages_plan, notes, r6)
+        # One shared meter across every worker thread — CostMeter.record takes
+        # a lock precisely so this fan-out can bill into it concurrently.
+        html = generate_page(intel, design, page, pages_plan, notes, r6, meter=meter)
         html = _inject_base_href(html, prospect_id)
         html = _fix_absolute_page_links(html, pages_plan)
         if "</body>" in html:
@@ -961,7 +976,8 @@ def generate_multi_page_site(
     return site_paths
 
 
-def generate_email(intel: dict, grade: dict, prospect_id: str, r6: Optional[dict] = None) -> dict:
+def generate_email(intel: dict, grade: dict, prospect_id: str, r6: Optional[dict] = None,
+                   meter=None) -> dict:
     """Generate cold outreach email. grade and prospect_id kept for api.py compatibility."""
     preview_url = f"https://joshclifford.github.io/lvrg-previews/{prospect_id}/index.html"
     pain_point = _pain_point_context(intel, r6)
@@ -999,11 +1015,12 @@ Return as JSON:
 
     client = _get_client()
     response = client.messages.create(
-        model="claude-opus-4-5",
+        model="claude-sonnet-5",
         max_tokens=1500,
         messages=[{"role": "user", "content": email_prompt}]
     )
-    
+    cost.record(meter, "email", "claude-sonnet-5", response)
+
     raw = response.content[0].text.strip()
     if "```" in raw:
         raw = raw.split("```")[1]

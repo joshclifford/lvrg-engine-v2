@@ -41,17 +41,20 @@ def rig(monkeypatch):
     """Stub every step of the pipeline and record what the callback posts."""
     posted = []
 
-    def _fake_post(url, secret, lead_id, status, preview_url=None, error=None, grade=None):
+    def _fake_post(url, secret, lead_id, status, preview_url=None, error=None, grade=None,
+                   ai_cost=None):
         # Signature must track _post_build_callback exactly. It is documented
         # never to raise, so a mismatch here does not surface as a TypeError —
         # _deploy_and_report has already claimed the callback by then, and the
         # report is simply lost. That is how adding `grade` broke two tests with
-        # "expected one callback, got []" rather than an obvious error.
-        posted.append({"status": status, "preview_url": preview_url, "error": error, "grade": grade})
+        # "expected one callback, got []" rather than an obvious error, and
+        # adding `ai_cost` broke four more the same way.
+        posted.append({"status": status, "preview_url": preview_url, "error": error,
+                       "grade": grade, "ai_cost": ai_cost})
 
     monkeypatch.setattr(api, "_post_build_callback", _fake_post)
 
-    monkeypatch.setattr(api, "scrape_site", lambda domain, page_url="": {
+    monkeypatch.setattr(api, "scrape_site", lambda domain, page_url="", meter=None: {
         "domain": domain, "url": f"https://{domain}", "business_name": "Test Co",
         "description": "", "services": [], "location": "", "phone": "", "email": "",
         "photos": [], "press": [], "reviews": [],
@@ -105,7 +108,7 @@ def test_abandoned_generation_still_deploys_and_reports_ready(rig, monkeypatch):
     """
     generation_started = asyncio.Event()
 
-    def slow_generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6):
+    def slow_generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6, meter=None):
         # Mimics 3-4 sequential/concurrent Claude calls taking long enough to
         # outlive the caller's patience — the thread runs to completion even
         # though the coroutine awaiting it has been cancelled.
@@ -269,7 +272,7 @@ def test_grade_absent_when_the_build_dies_before_grading(rig, monkeypatch):
     which would lose the callback at the exact moment it matters — hence the
     separate `grade_for_callback` initialised to None.
     """
-    monkeypatch.setattr(api, "scrape_site", lambda d, page_url="": (_ for _ in ()).throw(
+    monkeypatch.setattr(api, "scrape_site", lambda d, page_url="", meter=None: (_ for _ in ()).throw(
         ValueError("Could not read https://acme.com — 0 chars of text")))
 
     async def scenario():
@@ -285,7 +288,7 @@ def test_grade_absent_when_the_build_dies_before_grading(rig, monkeypatch):
 
 def test_pipeline_error_before_deploy_reports_failed(rig, monkeypatch):
     """A build that dies during intel never reaches a deploy — still a failure."""
-    def boom(domain, page_url=""):
+    def boom(domain, page_url="", meter=None):
         raise ValueError("Could not read https://acme.com — 0 chars of text")
 
     monkeypatch.setattr(api, "scrape_site", boom)
