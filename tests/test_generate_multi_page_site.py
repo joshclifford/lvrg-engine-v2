@@ -217,7 +217,11 @@ class _FakeAnthropicClient:
             return SimpleNamespace(
                 get_final_message=lambda: SimpleNamespace(
                     stop_reason="end_turn",
-                    content=[SimpleNamespace(text="<!DOCTYPE html><html><body>x</body></html>")],
+                    # Thinking block first — see test_generate_page.py.
+                    content=[
+                        SimpleNamespace(type="thinking", thinking="planning"),
+                        SimpleNamespace(type="text", text="<!DOCTYPE html><html><body>x</body></html>"),
+                    ],
                 )
             )
 

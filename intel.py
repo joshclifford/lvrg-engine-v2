@@ -20,6 +20,7 @@ import anthropic
 from html import unescape as _unescape
 from urllib.parse import urljoin, urlparse, parse_qs
 import cost
+from claude_text import first_text
 from config import INTEL_DIR
 
 def _get_client():
@@ -869,7 +870,7 @@ Return ONLY valid JSON, no markdown, no explanation."""
     )
     cost.record(meter, "intel", "claude-haiku-4-5", response)
 
-    raw = response.content[0].text.strip()
+    raw = first_text(response).strip()
     if "```" in raw:
         raw = raw.split("```")[1]
         if raw.startswith("json"):

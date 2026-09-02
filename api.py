@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 # Engine modules
 import cost
+from claude_text import first_text
 from intel import scrape_site, grade_site
 from generator import generate_site, generate_multi_page_site, generate_email
 from pages import plan_pages
@@ -726,7 +727,7 @@ If you don't know something specific, say you'll have the team follow up."""
         messages=messages,
     )
 
-    return {"reply": response.content[0].text.strip()}
+    return {"reply": first_text(response).strip()}
 
 
 @app.post("/migrate")

@@ -47,7 +47,15 @@ def _mock_client(captured, html="<!DOCTYPE html><html><head></head><body>hi</bod
     stream_cm.__enter__ = MagicMock(return_value=SimpleNamespace(
         get_final_message=lambda: SimpleNamespace(
             stop_reason="end_turn",
-            content=[SimpleNamespace(text=html)],
+            # A thinking block FIRST, then the text — the real shape
+            # claude-sonnet-5 returns, since adaptive thinking is on by
+            # default. The old double emitted a bare text block with no
+            # `type`, which is what let `response.content[0].text` pass
+            # every test while failing every real build (2 Sep 2026).
+            content=[
+                SimpleNamespace(type="thinking", thinking="planning the page"),
+                SimpleNamespace(type="text", text=html),
+            ],
         )
     ))
     stream_cm.__exit__ = MagicMock(return_value=False)

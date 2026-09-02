@@ -38,7 +38,11 @@ def _mock_client(captured, html="<!DOCTYPE html><html><head></head><body>hi</bod
     stream_cm.__enter__ = MagicMock(return_value=SimpleNamespace(
         get_final_message=lambda: SimpleNamespace(
             stop_reason="end_turn",
-            content=[SimpleNamespace(text=html)],
+            # Thinking block first — see the note in test_generate_page.py.
+            content=[
+                SimpleNamespace(type="thinking", thinking="planning the page"),
+                SimpleNamespace(type="text", text=html),
+            ],
         )
     ))
     stream_cm.__exit__ = MagicMock(return_value=False)

@@ -17,6 +17,7 @@ from typing import Optional
 import anthropic
 
 import cost
+from claude_text import first_text
 from config import SITES_DIR, BOOKING_URL, SENDER_NAME, SENDER_AGENCY
 
 # Ceiling for a generated page. This is a cap, not a target — most pages come in
@@ -526,7 +527,7 @@ Start with <!DOCTYPE html>"""
     if response.stop_reason == "max_tokens":
         print(f"  [generator] WARNING: hit max_tokens ({SITE_MAX_TOKENS}) — page may be cut short")
 
-    html = response.content[0].text.strip()
+    html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
 
@@ -730,7 +731,7 @@ Start with <!DOCTYPE html>"""
     if response.stop_reason == "max_tokens":
         print(f"  [generator] WARNING: hit max_tokens ({PAGE_MAX_TOKENS}) on page {page['filename']} — may be cut short")
 
-    html = response.content[0].text.strip()
+    html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
     return html
@@ -876,7 +877,7 @@ Start with <!DOCTYPE html>"""
     if response.stop_reason == "max_tokens":
         print(f"  [generator] WARNING: hit max_tokens ({PAGE_MAX_TOKENS}) on a {offer} lead magnet for {intel['business_name']} — may be cut short")
 
-    html = response.content[0].text.strip()
+    html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
     return html
@@ -1021,7 +1022,7 @@ Return as JSON:
     )
     cost.record(meter, "email", "claude-sonnet-5", response)
 
-    raw = response.content[0].text.strip()
+    raw = first_text(response).strip()
     if "```" in raw:
         raw = raw.split("```")[1]
         if raw.startswith("json"):
