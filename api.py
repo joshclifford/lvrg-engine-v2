@@ -401,11 +401,13 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         """
         nonlocal callback_sent, deploy_error
         if multi_page:
-            paths = generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6, meter=meter)
+            paths = generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6,
+                                             meter=meter, photo_assets=photo_assets)
             site_dir_local = os.path.dirname(next(iter(paths.values())))
         else:
             paths = None
-            site_dir_local = generate_site(intel, prospect_id, notes, r6, meter=meter)
+            site_dir_local = generate_site(intel, prospect_id, notes, r6,
+                                           meter=meter, photo_assets=photo_assets)
 
         if no_deploy:
             return f"[local] {site_dir_local}/index.html", paths
@@ -469,6 +471,20 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         intel = await loop.run_in_executor(
             None, lambda: scrape_site(domain, page_url, meter=meter)
         )
+        # Lift the downloaded photo bytes straight off the dict, BEFORE `intel`
+        # is emitted or stored anywhere (POD01-124). Three lines below it goes
+        # out over SSE, and further down into result_payload — from where
+        # leadscraper writes it to `businesses.smart_site_intel`, a column its
+        # All Leads query selects for every row on screen. Measured: four real
+        # photos take one lead's intel from 6.7 KB to 771 KB, and a 25-row page
+        # from 166 KB to 18.8 MB. The assets are needed only by the generator,
+        # so they travel as their own argument and never on the record.
+        #
+        # Popped HERE rather than stripped at each exit: this is the one place
+        # every build passes through, and a strip-per-boundary scheme is how
+        # the next boundary gets missed.
+        photo_assets = intel.pop("photo_assets", None)
+
         # Prefer Scout-found email/phone over scraped (Scout finds real contact emails)
         if queue_contact.get("email"): intel["email"] = queue_contact["email"]
         if queue_contact.get("phone"): intel["phone"] = queue_contact["phone"]

@@ -108,7 +108,7 @@ def test_abandoned_generation_still_deploys_and_reports_ready(rig, monkeypatch):
     """
     generation_started = asyncio.Event()
 
-    def slow_generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6, meter=None):
+    def slow_generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6, meter=None, photo_assets=None):
         # Mimics 3-4 sequential/concurrent Claude calls taking long enough to
         # outlive the caller's patience — the thread runs to completion even
         # though the coroutine awaiting it has been cancelled.

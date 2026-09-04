@@ -123,8 +123,7 @@ _PLAYWRIGHT_SLOTS = threading.BoundedSemaphore(PLAYWRIGHT_MAX_CONCURRENT)
 _JUNK_IMAGE = re.compile(
     r"(?<![a-z0-9])"
     r"(logo|icon|favicon|sprite|badge|avatar|placeholder|pixel|tracking|"
-    r"spinner|loader|arrow|chevron|bullet|divider|pattern|1x1|blank|"
-    r"marker|leaflet)"
+    r"spinner|loader|arrow|chevron|bullet|divider|pattern|1x1|blank)"
     r"s?(?![a-z0-9])",
     re.I,
 )
@@ -171,14 +170,39 @@ _MAP_TILE_HOST = re.compile(
     r"tiles?\.wmflabs\.org"
     r")$", re.I)
 
+# The XYZ path convention, /{z}/{x}/{y}.png. Shape alone is not enough — a CMS
+# that shards media into numeric folders produces the same three segments, and
+# /media/12/34/5678.jpg was being dropped as a tile. What separates them is
+# arithmetic: a real tile's x and y must both fall inside the 2**z grid that
+# zoom level defines. 5678 does not fit z=12's 4096, and /img/2/3/4.jpg does not
+# fit z=2's 4. Genuine tiles always do.
 _MAP_TILE_PATH = re.compile(
-    r"/\d{1,2}/\d{1,7}/\d{1,7}(@\d+x)?\.(png|jpe?g|webp)(\?|$)", re.I)
+    r"/(\d{1,2})/(\d{1,7})/(\d{1,7})(?:@\d+x)?\.(?:png|jpe?g|webp)(?:\?|$)", re.I)
+
+# Map-WIDGET furniture: Leaflet ships its own pins, and once the tiles are gone
+# those pins are the next thing in line to become a hero image.
+#
+# Matched narrowly on purpose. Bare "marker" and "leaflet" were briefly in
+# _JUNK_IMAGE and cost real photos: a print shop's /leaflet-design-samples/ and
+# any business with marker in a filename. Only the library's own asset names
+# and its versioned dist folder qualify.
+_MAP_FURNITURE = re.compile(r"marker-(?:icon|shadow)|/leaflet[/@]", re.I)
 
 
 def _is_map_tile(url: str) -> bool:
-    """A slippy-map tile, not a photograph of the business."""
-    return bool(_MAP_TILE_HOST.search(urlparse(url).netloc.lower())
-                or _MAP_TILE_PATH.search(url))
+    """A slippy-map tile or map-widget asset, not a photograph of the business."""
+    if _MAP_TILE_HOST.search(urlparse(url).netloc.lower()):
+        return True
+    if _MAP_FURNITURE.search(url):
+        return True
+    m = _MAP_TILE_PATH.search(url)
+    if not m:
+        return False
+    z, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if z > 22:                      # no tile scheme goes deeper
+        return False
+    span = 1 << z
+    return x < span and y < span
 
 
 
@@ -1198,7 +1222,10 @@ def scrape_site(domain: str, page_url: str = "", meter=None) -> dict:
     os.makedirs(INTEL_DIR, exist_ok=True)
     slug = domain.replace(".", "_")
     with open(os.path.join(INTEL_DIR, f"{slug}.json"), "w") as f:
-        json.dump(intel, f, indent=2)
+        # Without photo_assets: this file is a debugging record, and a few
+        # hundred KB of base64 per build would bury the fields anyone opens it
+        # to read — on a container whose disk does not survive a redeploy.
+        json.dump({k: v for k, v in intel.items() if k != "photo_assets"}, f, indent=2)
     
     return intel
 

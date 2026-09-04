@@ -32,7 +32,7 @@ def test_calls_generate_page_once_per_planned_page(monkeypatch, tmp_path):
     monkeypatch.setattr(generator, "SITES_DIR", str(tmp_path))
     calls = []
 
-    def fake_generate_page(intel, design, page, nav, notes="", r6=None, meter=None):
+    def fake_generate_page(intel, design, page, nav, notes="", r6=None, meter=None, photo_assets=None):
         calls.append(page["slug"])
         return f"<html><body>{page['slug']}</body></html>"
 
@@ -50,7 +50,7 @@ def test_same_design_object_passed_to_every_page(monkeypatch, tmp_path):
     monkeypatch.setattr(generator, "SITES_DIR", str(tmp_path))
     seen_designs = []
 
-    def fake_generate_page(intel, design, page, nav, notes="", r6=None, meter=None):
+    def fake_generate_page(intel, design, page, nav, notes="", r6=None, meter=None, photo_assets=None):
         seen_designs.append(design)
         return "<html><body>x</body></html>"
 
@@ -66,7 +66,7 @@ def test_files_written_with_planned_filenames(monkeypatch, tmp_path):
     monkeypatch.setattr(generator, "SITES_DIR", str(tmp_path))
     monkeypatch.setattr(
         generator, "generate_page",
-        lambda intel, design, page, nav, notes="", r6=None, meter=None: f"<html><body>{page['slug']}</body></html>",
+        lambda intel, design, page, nav, notes="", r6=None, meter=None, photo_assets=None: f"<html><body>{page['slug']}</body></html>",
     )
 
     site_paths = generator.generate_multi_page_site(_intel(), "acme-com", _pages_plan())
@@ -89,7 +89,7 @@ def test_stale_page_from_a_prior_build_is_removed(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         generator, "generate_page",
-        lambda intel, design, page, nav, notes="", r6=None, meter=None: f"<html><body>{page['slug']}</body></html>",
+        lambda intel, design, page, nav, notes="", r6=None, meter=None, photo_assets=None: f"<html><body>{page['slug']}</body></html>",
     )
     generator.generate_multi_page_site(_intel(), "acme-com", _pages_plan())
 
@@ -100,7 +100,7 @@ def test_one_failing_page_raises_and_nothing_deployed(monkeypatch, tmp_path):
     monkeypatch.setattr(generator, "SITES_DIR", str(tmp_path))
     calls = []
 
-    def failing_generate_page(intel, design, page, nav, notes="", r6=None, meter=None):
+    def failing_generate_page(intel, design, page, nav, notes="", r6=None, meter=None, photo_assets=None):
         calls.append(page["slug"])
         if page["slug"] == "about":
             raise RuntimeError("Claude call failed")
@@ -125,7 +125,7 @@ def test_chat_widget_and_base_href_injected_into_every_page(monkeypatch, tmp_pat
     monkeypatch.setattr(generator, "SITES_DIR", str(tmp_path))
     monkeypatch.setattr(
         generator, "generate_page",
-        lambda intel, design, page, nav, notes="", r6=None, meter=None:
+        lambda intel, design, page, nav, notes="", r6=None, meter=None, photo_assets=None:
             "<!DOCTYPE html><html><head></head><body>x</body></html>",
     )
 
@@ -144,7 +144,7 @@ def test_pages_actually_overlap_in_wall_time(monkeypatch, tmp_path):
     that catches it — the others only check the OUTPUT, not the timing."""
     monkeypatch.setattr(generator, "SITES_DIR", str(tmp_path))
 
-    def slow_generate_page(intel, design, page, nav, notes="", r6=None, meter=None):
+    def slow_generate_page(intel, design, page, nav, notes="", r6=None, meter=None, photo_assets=None):
         time.sleep(0.3)
         return f"<html><body>{page['slug']}</body></html>"
 
@@ -167,7 +167,7 @@ def test_concurrency_never_exceeds_the_configured_cap(monkeypatch, tmp_path):
     peak_in_flight = 0
     lock = threading.Lock()
 
-    def tracked_generate_page(intel, design, page, nav, notes="", r6=None, meter=None):
+    def tracked_generate_page(intel, design, page, nav, notes="", r6=None, meter=None, photo_assets=None):
         nonlocal in_flight, peak_in_flight
         with lock:
             in_flight += 1
