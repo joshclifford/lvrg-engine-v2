@@ -11,6 +11,8 @@ blocked by, and nothing to misattribute.
 """
 
 import requests
+import base64
+import concurrent.futures
 import json
 import os
 import threading
@@ -736,6 +738,123 @@ def extract_photos(html: str, base_url: str, limit: int = 6) -> list:
             for i, url in enumerate(_photo_candidates(html, base_url, limit))]
 
 
+# --- Photo rehosting (POD01-124) ---------------------------------------------
+#
+# extract_photos returns URLs on the PROSPECT'S OWN domain, and the generator
+# embedded them verbatim as <img src>. That made every published Smart Site a
+# permanent live dependency on a server we do not control: the day the prospect
+# 403s us, redesigns, or lets hosting lapse, our page silently loses every
+# photo. Nothing errors — the build still reports success and the status still
+# reads ready. Su Pan Bakery is the confirmed case.
+#
+# The bytes are inlined as data: URIs rather than deployed as image files
+# alongside the html. That is forced, not stylistic. The public preview is
+# served by leadscraper's edge proxy (api/preview/index.ts), and that proxy
+# cannot serve an image at all: vercel.json only rewrites /preview/<slug> and
+# /preview/<slug>/<page>, PAGE_RE requires the name to end in .html, the body
+# is read with .text() (which would UTF-8-mangle a JPEG), and Content-Type is
+# hardcoded to text/html. Measured against the live site: a flat <slug>/x.jpg
+# 404s, and <slug>/images/x.jpg falls through to the SPA catch-all and returns
+# the app's landing page with a 200 — a broken image that looks like a success.
+# _inject_base_href does not rescue it; it makes relative srcs resolve to
+# exactly those unroutable paths. A fully self-contained page is the only shape
+# this proxy can serve, which is what its own header comment says it assumes.
+
+# Matches _build_photo_block's photos[:4]. Fetching the other two candidates
+# would spend build seconds on bytes the prompt never shows the model.
+_PHOTO_INLINE_MAX = int(os.environ.get("PHOTO_INLINE_MAX", "4"))
+
+# Wall clock per image, enforced against the read loop and not just the socket:
+# requests' timeout is per-read, so a server trickling one byte at a time
+# satisfies it forever. The byte cap below bounds memory but not time.
+_PHOTO_FETCH_TIMEOUT = int(os.environ.get("PHOTO_FETCH_TIMEOUT", "6"))
+
+# Per image. Same reasoning as _MAX_UPGRADE_BYTES, applied to what we publish
+# rather than to what we merely link.
+_MAX_PHOTO_BYTES = int(os.environ.get("MAX_PHOTO_BYTES", "900000"))
+
+# Total RAW bytes inlined into one page. base64 costs +33%, and the preview
+# proxy rejects any upstream over MAX_PREVIEW_BYTES (5 MB) with a 502 — a cap
+# that lives in another repo and would fail as a blank page, not a build error.
+# 2.4 MB raw is ~3.2 MB encoded on top of a ~27 KB page: comfortably inside it.
+# Measured reference: four real photos off a live prospect came to 573 KB.
+_MAX_PHOTO_TOTAL_BYTES = int(os.environ.get("MAX_PHOTO_TOTAL_BYTES", "2400000"))
+
+
+def _fetch_one_photo(url: str):
+    """One image, bounded in both bytes and seconds. (url, mime, bytes) or None.
+
+    Every failure returns None rather than raising: a photo we cannot fetch
+    keeps its original URL downstream, which is exactly the behaviour that
+    shipped before this change. The worst case is the old bug, never a lost
+    build.
+    """
+    deadline = time.monotonic() + _PHOTO_FETCH_TIMEOUT
+    try:
+        with requests.get(url, headers=HEADERS, timeout=_PHOTO_FETCH_TIMEOUT,
+                          stream=True) as resp:
+            if resp.status_code != 200:
+                return None
+            mime = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            # A soft-404 or a WAF challenge answers 200 with text/html. Inlining
+            # that as an "image" would publish a broken icon on every page and
+            # look exactly like the bug this function exists to fix.
+            if not mime.startswith("image/"):
+                return None
+            declared = resp.headers.get("Content-Length")
+            if declared and declared.isdigit() and int(declared) > _MAX_PHOTO_BYTES:
+                return None
+            buf = bytearray()
+            for chunk in resp.iter_content(65536):
+                if time.monotonic() > deadline:
+                    return None
+                buf.extend(chunk)
+                # Content-Length is a hint, not a promise. Enforce on real bytes.
+                if len(buf) > _MAX_PHOTO_BYTES:
+                    return None
+            return (url, mime, bytes(buf)) if buf else None
+    except Exception:
+        return None
+
+
+def fetch_photo_assets(photos: list) -> dict:
+    """Download the photos the generator will publish, as {url: data-uri}.
+
+    PARALLEL, not serial, and that is the whole feasibility argument: measured
+    on a live prospect, four real photos took 19.8s one after another and 3.0s
+    fanned out. Serially this would not fit — build-smart-site aborts at 160s
+    and real builds already run 106-150s.
+
+    A url missing from the returned dict simply keeps pointing at the
+    prospect's server, so a partial result degrades to today's behaviour for
+    those photos instead of failing the build.
+    """
+    urls = [u for u in (photos or [])[:_PHOTO_INLINE_MAX] if u]
+    if not urls:
+        return {}
+
+    fetched = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(urls)) as pool:
+        for got in pool.map(_fetch_one_photo, urls):
+            if got:
+                fetched[got[0]] = (got[1], got[2])
+
+    # Trim in the ORIGINAL order, not completion order: photos[0] is the hero
+    # and the one the page leans on hardest, so it must never be the one the
+    # total budget drops.
+    out, total = {}, 0
+    for url in urls:
+        got = fetched.get(url)
+        if not got:
+            continue
+        mime, blob = got
+        if total + len(blob) > _MAX_PHOTO_TOTAL_BYTES:
+            continue
+        total += len(blob)
+        out[url] = "data:%s;base64,%s" % (mime, base64.b64encode(blob).decode("ascii"))
+    return out
+
+
 def _mentions_business(sentence: str, business_name: str) -> bool:
     """Does this sentence actually name the business?
 
@@ -960,6 +1079,16 @@ def scrape_site(domain: str, page_url: str = "", meter=None) -> dict:
     photos = extract_photos(raw_html, scraped.get("final_url") or url)
     print(f"  [intel] Photos: {len(photos)} found on their site")
 
+    # Download what the generator will actually publish, so the finished site
+    # stops depending on the prospect's server answering forever (POD01-124).
+    # Deliberately ABOVE the press-search budget check below: these seconds
+    # come out of INTEL_BUDGET_SECONDS, and if something has to give, the
+    # optional press search is the stage designed to be dropped. A page with no
+    # press quotes beats a page whose photos die the week after we send it.
+    photo_assets = fetch_photo_assets(photos)
+    print(f"  [intel] Photos inlined: {len(photo_assets)}/"
+          f"{min(len(photos), _PHOTO_INLINE_MAX)}")
+
     # Press is the one genuinely optional stage — skip it if the scrape and the
     # extraction already ate the intel budget.
     elapsed = time.monotonic() - started
@@ -1001,6 +1130,10 @@ def scrape_site(domain: str, page_url: str = "", meter=None) -> dict:
         "raw_text": raw_text[:6000],
         # V2 enrichment
         "photos": photos,
+        # {original url: data: uri} for the photos we managed to download.
+        # The generator substitutes these into the finished html; anything
+        # missing here keeps pointing at the prospect's own server.
+        "photo_assets": photo_assets,
         "press_mentions": press,
         # Rating and review count are real data the app already holds (Google
         # Maps via Apify). api.py merges them in from engine_queue when present.
