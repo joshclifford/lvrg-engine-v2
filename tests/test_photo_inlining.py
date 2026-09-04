@@ -238,3 +238,65 @@ def test_gradients_still_cover_the_no_photos_case():
 def test_a_caller_that_never_fetched_keeps_its_photos():
     intel_d = {"photos": ["https://p.com/a.jpg"]}
     assert "a.jpg" in generator._build_photo_block(intel_d)
+
+
+# --- map tiles are not photos -------------------------------------------------
+#
+# panchitasbakery.com embeds a Leaflet/OSM map. Its tiles are real .png files
+# with innocent paths, so they cleared every filter and outranked the food
+# photos on DOM position — the generator got six map tiles labelled "REAL
+# PHOTOS" and built the hero and the location gallery out of them. OSM then
+# served its black-and-yellow "Access blocked" image, with HTTP 200 and
+# Content-Type: image/png, so nothing downstream could tell it from a photo.
+
+TILES = [
+    "https://a.tile.openstreetmap.org/16/11446/26452.png",
+    "https://b.tile.openstreetmap.org/16/11445/26452.png",
+    "https://api.mapbox.com/v4/mapbox.streets/16/11446/26452.png",
+    "https://basemaps.cartocdn.com/light_all/16/11446/26452.png",
+    "https://selfhosted.example.com/tiles/16/11446/26452.png",
+]
+
+REAL_PHOTOS = [
+    "https://panchitasbakery.com/wp-content/uploads/2025/12/DSC06907.jpg",
+    "https://shop.com/cdn/shop/files/3.jpg?v=1743618795&width=1000",
+    "https://p.com/images/storefront.png",
+    "https://images.squarespace-cdn.com/content/abc/hero.jpg",
+]
+
+
+@pytest.mark.parametrize("url", TILES)
+def test_map_tiles_are_recognised(url):
+    assert intel._is_map_tile(url), url
+
+
+@pytest.mark.parametrize("url", REAL_PHOTOS)
+def test_real_photos_are_not_mistaken_for_tiles(url):
+    assert not intel._is_map_tile(url), url
+
+
+def test_wordpress_date_folders_are_not_read_as_tile_coordinates():
+    """/uploads/2025/12/1234.jpg has the same three-numeric-segment shape as
+    /{z}/{x}/{y}.png. Capping z at two digits is what separates them."""
+    assert not intel._is_map_tile("https://p.com/wp-content/uploads/2025/12/1234.jpg")
+
+
+def test_tiles_are_dropped_before_they_can_become_photos():
+    html = "".join(f'<img src="{u}">' for u in TILES[:2]) + \
+           '<img src="https://p.com/img/storefront.jpg">'
+    photos = intel.extract_photos(html, "https://p.com")
+    assert photos == ["https://p.com/img/storefront.jpg"]
+
+
+def test_leaflet_map_furniture_is_dropped():
+    """Once the tiles are gone, the library's own pins are what is left to
+    become the hero."""
+    html = ('<img src="https://static.spotapps.co/web-lib/leaflet/dist/images/marker-shadow.png">'
+            '<img src="https://p.com/img/storefront.jpg">')
+    assert intel.extract_photos(html, "https://p.com") == ["https://p.com/img/storefront.jpg"]
+
+
+def test_a_page_that_is_only_a_map_yields_no_photos():
+    """Gradients, not an 'Access blocked' hero."""
+    html = "".join(f'<img src="{u}">' for u in TILES)
+    assert intel.extract_photos(html, "https://p.com") == []

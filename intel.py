@@ -123,7 +123,8 @@ _PLAYWRIGHT_SLOTS = threading.BoundedSemaphore(PLAYWRIGHT_MAX_CONCURRENT)
 _JUNK_IMAGE = re.compile(
     r"(?<![a-z0-9])"
     r"(logo|icon|favicon|sprite|badge|avatar|placeholder|pixel|tracking|"
-    r"spinner|loader|arrow|chevron|bullet|divider|pattern|1x1|blank)"
+    r"spinner|loader|arrow|chevron|bullet|divider|pattern|1x1|blank|"
+    r"marker|leaflet)"
     r"s?(?![a-z0-9])",
     re.I,
 )
@@ -139,6 +140,46 @@ _PROMO_IMAGE = re.compile(
 
 # WordPress writes crops as name-1024x839.png next to the full-size name.png.
 _WP_THUMB = re.compile(r"-(\d{2,4})x(\d{2,4})(\.(?:jpe?g|png|webp))$", re.I)
+
+# Map tiles are not photos of the business.
+#
+# A prospect with a Leaflet/OSM map on their contact page serves dozens of
+# <img src="https://a.tile.openstreetmap.org/16/11446/26452.png">. Those clear
+# every filter here — real .png extension, no junk word anywhere in the path —
+# and they sit early enough in the DOM to outrank the actual food photos. On
+# panchitasbakery.com the top SIX candidates were all map tiles, so the
+# generator was handed six of them labelled "REAL PHOTOS" and built the hero
+# background and the whole location gallery out of them.
+#
+# What the recipient then sees is not a map. OSM answers clients that ignore
+# its tile usage policy with a black-and-yellow "Access blocked" image — and
+# serves it with HTTP 200 and Content-Type: image/png, so neither the scrape,
+# the download, nor any check downstream can tell it from a real photograph.
+# The lead magnet goes out with "Access blocked" as its hero.
+#
+# Two checks, because self-hosted tile servers are common: the known providers
+# by host, and the /{z}/{x}/{y}.png XYZ convention by path. The path pattern
+# caps z at two digits, which is what keeps it off WordPress date folders
+# (/uploads/2025/12/...) — a real photo path that otherwise looks identical.
+_MAP_TILE_HOST = re.compile(
+    r"(^|\.)("
+    r"tiles?\.openstreetmap\.org|tiles?\.opentopomap\.org|"
+    r"tiles?\.mapbox\.com|api\.mapbox\.com|"
+    r"basemaps\.cartocdn\.com|server\.arcgisonline\.com|"
+    r"maps\.googleapis\.com|maps\.gstatic\.com|"
+    r"tiles?\.stadiamaps\.com|tiles?\.thunderforest\.com|"
+    r"tiles?\.wmflabs\.org"
+    r")$", re.I)
+
+_MAP_TILE_PATH = re.compile(
+    r"/\d{1,2}/\d{1,7}/\d{1,7}(@\d+x)?\.(png|jpe?g|webp)(\?|$)", re.I)
+
+
+def _is_map_tile(url: str) -> bool:
+    """A slippy-map tile, not a photograph of the business."""
+    return bool(_MAP_TILE_HOST.search(urlparse(url).netloc.lower())
+                or _MAP_TILE_PATH.search(url))
+
 
 
 def _sans_host(url: str) -> str:
@@ -699,6 +740,10 @@ def _photo_candidates(html: str, base_url: str, limit: int = 6) -> list:
         # failure being fixed two lines below.
         if not _PHOTO_EXT.search(absolute):
             continue          # skips .svg, .gif and extensionless endpoints
+        # Before the junk check, which reads the path only and cannot see a
+        # tile host. A map tile is a valid .png with an innocent path.
+        if _is_map_tile(absolute):
+            continue
         # The JUNK check, by contrast, must not see the HOST. Against the full
         # url it also matched the host, and _JUNK_IMAGE contains substrings that
         # occur in ordinary business names — so a prospect at
