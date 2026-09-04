@@ -90,7 +90,10 @@ def process_prospect(domain: str, campaign_id: str, args) -> dict:
         
         # Step 3: Generate site
         print(f"\n[3/5] Generating preview site...")
-        site_dir = generate_site(intel, prospect_id)
+        # Same lift as api.py: the bytes are the generator's business, not the
+        # intel record's. See the note there.
+        site_dir = generate_site(intel, prospect_id,
+                                 photo_assets=intel.pop("photo_assets", None))
         result["site_dir"] = site_dir
         
         # Step 4: Deploy

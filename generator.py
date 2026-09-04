@@ -330,6 +330,29 @@ def _build_photo_block(intel: dict) -> str:
     instruction — extracted from generate_site so generate_page can reuse the
     exact same rendering without a second, drifting copy."""
     photos = intel.get("photos", [])
+
+    # Every photo here is offered, downloaded or not (POD01-124).
+    #
+    # _inline_photo_assets swaps in the bytes for the ones intel fetched; the
+    # rest keep their original url and hotlink the prospect's server, exactly
+    # as before. That is DELIBERATE, and the reason is where the engine runs:
+    # a failed download does not mean a dead image, it means dead FOR US. This
+    # process fetches from a Railway datacenter IP, and blanket datacenter
+    # blocking is the single most common reason a fetch fails — the same
+    # failure that killed the old Yelp photo source and is written up at the
+    # top of intel.py. It also covers a photo over _MAX_PHOTO_BYTES or slower
+    # than _PHOTO_FETCH_TIMEOUT: both load fine in a real browser on a real
+    # connection.
+    #
+    # So dropping those would trade a page that shows the prospect's actual
+    # photos for a gradient, on nothing better than a guess that our IP's
+    # experience matches the recipient's. Hotlinking is the weaker outcome,
+    # not a broken one, and it is strictly no worse than every build shipped
+    # before rehosting existed.
+    #
+    # The gradient path below still exists for its original case: no photos
+    # found on the page at all.
+
     if photos:
         return f"""REAL PHOTOS (these are from the business's own website — use them as actual <img> tags, link directly to the URLs):
 {chr(10).join(f'  {i+1}. {url}' for i, url in enumerate(photos[:4]))}
@@ -421,7 +444,7 @@ def _close_truncated_html(html: str) -> str:
 
 
 def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[dict] = None,
-                  meter=None) -> str:
+                  meter=None, photo_assets: Optional[dict] = None) -> str:
     """Generate a complete single-file HTML site for a prospect. Returns folder path.
 
     `meter` is an optional cost.CostMeter. Keyword-only in practice and
@@ -545,6 +568,7 @@ Start with <!DOCTYPE html>"""
     html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
+    html = _inline_photo_assets(html, photo_assets)
 
     # Inject chat widget before </body> — now always present, so the else is
     # only a belt-and-braces fallback.
@@ -563,6 +587,39 @@ Start with <!DOCTYPE html>"""
     
     print(f"  [generator] ✓ V2 site saved to {site_dir}")
     return site_dir
+
+
+def _inline_photo_assets(html: str, assets: Optional[dict]) -> str:
+    """Swap the prospect's photo URLs for the bytes intel downloaded (POD01-124).
+
+    Takes the ASSET MAP, never the intel dict. These blobs must not travel on
+    `intel`: api.py streams that dict to the caller and leadscraper writes it
+    to `businesses.smart_site_intel`, a column its All Leads query selects for
+    every row on screen. Measured, four real photos took one lead's intel from
+    6.7 KB to 771 KB — a 25-row page from 166 KB to 18.8 MB. leadSelect.ts's
+    own header records the last time that column class was allowed to grow.
+
+    Runs AFTER generation, on purpose. _build_photo_block still hands Claude the
+    original URLs, so the prompt is byte-for-byte what it was and the model's
+    output cannot drift because of this change. It also keeps base64 out of the
+    token stream, where four photos would cost more than the rest of the build
+    put together.
+
+    Applied in all three producers rather than at their call sites, so a new
+    caller cannot reintroduce the bug by forgetting it. Idempotent — a second
+    pass finds no original URLs left to match.
+
+    Substitutes only URLs that occur in THIS page's html, so a sub-page using
+    two of the four photos carries two, not four. Plain string replace is safe:
+    measured across every live preview, an image src is never HTML-escaped
+    (0 of 24 query-string srcs escape their &).
+    """
+    if not assets:
+        return html
+    for url, data_uri in assets.items():
+        if url in html:
+            html = html.replace(url, data_uri)
+    return html
 
 
 def _inject_base_href(html: str, prospect_id: str) -> str:
@@ -603,6 +660,7 @@ def generate_page(
     notes: str = "",
     r6: Optional[dict] = None,
     meter=None,
+    photo_assets: Optional[dict] = None,
 ) -> str:
     """Generate ONE page of a multi-page site. Returns raw HTML — does not
     write to disk (generate_multi_page_site owns the filesystem). `design`
@@ -750,6 +808,7 @@ Start with <!DOCTYPE html>"""
     html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
+    html = _inline_photo_assets(html, photo_assets)
     return html
 
 
@@ -782,6 +841,7 @@ def generate_offer_lead_magnet_page(
     intel: dict,
     vertical: Optional[str] = None,
     meter=None,
+    photo_assets: Optional[dict] = None,
 ) -> str:
     """Generate a single-page mockup for the Get Listed or Sponsored Story
     lead magnet. `offer` is "get_listed" or "sponsored_story". `vertical`
@@ -897,6 +957,7 @@ Start with <!DOCTYPE html>"""
     html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
+    html = _inline_photo_assets(html, photo_assets)
     return html
 
 
@@ -907,6 +968,7 @@ def generate_multi_page_site(
     notes: str = "",
     r6: Optional[dict] = None,
     meter=None,
+    photo_assets: Optional[dict] = None,
 ) -> dict:
     """Generate every planned page CONCURRENTLY, capped at
     PAGE_GENERATION_CONCURRENCY at a time (24 Aug 2026 — was strictly
@@ -948,7 +1010,8 @@ def generate_multi_page_site(
         print(f"  [generator] Generating page '{page['title']}' ({page['filename']}) for {intel['business_name']}...")
         # One shared meter across every worker thread — CostMeter.record takes
         # a lock precisely so this fan-out can bill into it concurrently.
-        html = generate_page(intel, design, page, pages_plan, notes, r6, meter=meter)
+        html = generate_page(intel, design, page, pages_plan, notes, r6,
+                             meter=meter, photo_assets=photo_assets)
         html = _inject_base_href(html, prospect_id)
         html = _fix_absolute_page_links(html, pages_plan)
         if "</body>" in html:
