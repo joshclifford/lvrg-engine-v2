@@ -338,6 +338,37 @@ def test_srcset_and_unquoted_urls_are_protected_too(html):
     assert generator._strip_em_dashes(html) == html
 
 
+@pytest.mark.parametrize(
+    "html",
+    [
+        "the &ndashboard is here",
+        '<a href="/p?x=1&mdashboard=1">x</a>',
+    ],
+)
+def test_entity_match_does_not_eat_the_prefix_of_a_longer_word(html):
+    """An optional semicolon also matched the "&mdash" inside "&mdashboard=1",
+    leaving "—board=1". The name must not run straight into more letters."""
+    assert generator._strip_em_dashes(html) == html
+
+
+def test_entities_inside_a_protected_url_are_left_alone():
+    """The entity pass ran over the whole document before the split, so it
+    wrote inside the very attributes the split exists to protect."""
+    html = '<a href="/a&mdash;b">x</a>'
+    assert generator._strip_em_dashes(html) == html
+
+
+def test_trailing_dash_inside_an_attribute_value_leaves_no_comma():
+    """Inside a tag the run ends at the value's closing quote, not at a
+    closing tag, so title="ends —" must not become title="ends, "."""
+    assert (
+        generator._strip_em_dashes('<a title="ends —" href="/y">x</a>')
+        == '<a title="ends" href="/y">x</a>'
+    )
+    # ... while a mid-value dash still becomes a comma.
+    assert generator._strip_em_dashes('<a title="a — b">x</a>') == '<a title="a, b">x</a>'
+
+
 def test_protection_is_scoped_to_the_url_not_the_whole_tag():
     assert (
         generator._strip_em_dashes('<img src="/p—1.jpg" alt="a—b">')

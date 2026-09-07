@@ -825,9 +825,13 @@ Start with <!DOCTYPE html>"""
 # as an em/en dash, not just the two a model reaches for most.
 _DASH_CHARS = "‒–—―"
 
-# The same four as HTML entities, named or numeric, hex or decimal, and tolerant
-# of the missing semicolon a model sometimes emits.
-_DASH_ENTITY_RE = re.compile(r"&(?:mdash|ndash|#x201[2-5]|#821[0-3]);?", re.IGNORECASE)
+# The same four as HTML entities, named or numeric, hex or decimal. The
+# semicolon is optional because models drop it, but then the name must not run
+# straight into more letters or digits: a bare ";?" also matched the "&mdash"
+# inside "&mdashboard=1" and left "—board=1".
+_DASH_ENTITY_RE = re.compile(
+    r"&(?:mdash|ndash|#x201[2-5]|#821[0-3])(?:;|(?![A-Za-z0-9]))", re.IGNORECASE
+)
 
 # Captures the character before the dash so the swap can see its own context in
 # one pass. Rewriting punctuation globally afterwards was the earlier approach
@@ -860,9 +864,15 @@ def _dash_replacement(match: "re.Match") -> str:
             return before + ", "
         return before
 
-    # Dash closed a text node. A comma before the tag renders as a stray one.
-    # Only a CLOSING tag counts: "a — <em>b</em>" still wants its comma.
-    if end >= len(text) or text.startswith("</", end):
+    # Was the dash trailing? Then a comma renders as a stray one. What ends the
+    # run depends on where we are: inside a tag it is the attribute value's
+    # closing quote, in body text it is a CLOSING tag. Only a closing one, so
+    # "a — <em>b</em>" keeps the separator it needs.
+    in_tag = text.rfind("<", 0, start) > text.rfind(">", 0, start)
+    trailing = end >= len(text) or (
+        text[end] in "\"'" if in_tag else text.startswith("</", end)
+    )
+    if trailing:
         return before
 
     if before in ".!?;:,":
@@ -872,6 +882,9 @@ def _dash_replacement(match: "re.Match") -> str:
 
 
 def _swap_dashes(chunk: str) -> str:
+    # Entities are decoded here, not before the split, so a "&mdash;" sitting
+    # inside a protected href is left alone with everything else in it.
+    chunk = _DASH_ENTITY_RE.sub("—", chunk)
     # A dash between digits is a range, not punctuation: "10—20" is "10-20".
     chunk = re.sub(rf"(?<=\d)\s*[{_DASH_CHARS}]\s*(?=\d)", "-", chunk)
     return _DASH_SPAN_RE.sub(_dash_replacement, chunk)
@@ -884,9 +897,7 @@ def _strip_em_dashes(html: str) -> str:
 
     Runs before photo inlining so it never walks a base64 data URI.
     """
-    html = _DASH_ENTITY_RE.sub("—", html)
-
-    # Rewrite the text, step over every href/src value untouched.
+    # Rewrite the text, step over every URL attribute value untouched.
     out, last = [], 0
     for attr in _PROTECTED_ATTR_RE.finditer(html):
         out.append(_swap_dashes(html[last:attr.start()]))
