@@ -834,16 +834,36 @@ _DASH_ENTITY_RE = re.compile(r"&(?:mdash|ndash|#x201[2-5]|#821[0-3]);?", re.IGNO
 # and it edited text containing no dash at all ("etc., and" lost its comma).
 _DASH_SPAN_RE = re.compile(rf"(\S)?\s*[{_DASH_CHARS}]\s*")
 
+# href/src values are left alone: a comma and a space inside a URL breaks the
+# link. Unreachable on today's pages, which carry only the fixed BOOKING_URL,
+# but it becomes reachable the moment a scraped URL lands in one of these.
+_PROTECTED_ATTR_RE = re.compile(
+    r"""\b(?:href|src)\s*=\s*(?:"[^"]*"|'[^']*')""", re.IGNORECASE
+)
+
 
 def _dash_replacement(match: "re.Match") -> str:
     before = match.group(1) or ""
     if not before or before == ">":
         # Dash opened a text node. There is nothing for it to join.
         return before
+
+    rest = match.string[match.end():]
+    # Dash closed a text node. A comma before the tag renders as a stray one.
+    # Only a CLOSING tag counts: "a — <em>b</em>" still wants its comma.
+    if not rest or rest.startswith("</"):
+        return before
+
     if before in ".!?;:,":
         # Punctuation already does the comma's job.
         return before + " "
     return before + ", "
+
+
+def _swap_dashes(chunk: str) -> str:
+    # A dash between digits is a range, not punctuation: "10—20" is "10-20".
+    chunk = re.sub(rf"(?<=\d)\s*[{_DASH_CHARS}]\s*(?=\d)", "-", chunk)
+    return _DASH_SPAN_RE.sub(_dash_replacement, chunk)
 
 
 def _strip_em_dashes(html: str) -> str:
@@ -854,10 +874,15 @@ def _strip_em_dashes(html: str) -> str:
     Runs before photo inlining so it never walks a base64 data URI.
     """
     html = _DASH_ENTITY_RE.sub("—", html)
-    # A dash between digits is a range, not punctuation: "10—20" is "10-20".
-    html = re.sub(rf"(?<=\d)\s*[{_DASH_CHARS}]\s*(?=\d)", "-", html)
-    # Everything else was doing a comma's job.
-    return _DASH_SPAN_RE.sub(_dash_replacement, html)
+
+    # Rewrite the text, step over every href/src value untouched.
+    out, last = [], 0
+    for attr in _PROTECTED_ATTR_RE.finditer(html):
+        out.append(_swap_dashes(html[last:attr.start()]))
+        out.append(attr.group(0))
+        last = attr.end()
+    out.append(_swap_dashes(html[last:]))
+    return "".join(out)
 
 
 # ── Get Listed / Sponsored Story lead magnets ───────────────────────────────

@@ -265,6 +265,46 @@ def test_dash_opening_a_text_node_does_not_leave_a_leading_comma():
     assert generator._strip_em_dashes("<p>— Hello</p>") == "<p>Hello</p>"
 
 
+@pytest.mark.parametrize(
+    "html,expected",
+    [
+        ("<p>text —</p>", "<p>text</p>"),
+        ("<h1>Kickserv —</h1>", "<h1>Kickserv</h1>"),
+        ("trailing —", "trailing"),
+    ],
+)
+def test_dash_closing_a_text_node_leaves_no_dangling_comma(html, expected):
+    """"<p>text —</p>" rendered as "text," and read as a typo on the preview."""
+    assert generator._strip_em_dashes(html) == expected
+
+
+def test_dash_before_an_opening_inline_tag_keeps_its_comma():
+    """The dangling-comma fix must not eat a real separator. Only a CLOSING
+    tag means the dash was trailing."""
+    assert generator._strip_em_dashes("<p>a — <em>b</em></p>") == "<p>a, <em>b</em></p>"
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<a href="https://x.com/a—b">go</a>',
+        '<a href="/x/9—5">t</a>',
+        "<img src='/p—1.jpg'>",
+    ],
+)
+def test_href_and_src_values_are_never_rewritten(html):
+    """A comma and a space inside a URL breaks the link. Unreachable today,
+    since these pages carry only BOOKING_URL, but not something to leave armed."""
+    assert generator._strip_em_dashes(html) == html
+
+
+def test_protection_is_scoped_to_the_url_not_the_whole_tag():
+    assert (
+        generator._strip_em_dashes('<img src="/p—1.jpg" alt="a—b">')
+        == '<img src="/p—1.jpg" alt="a, b">'
+    )
+
+
 def test_prose_dashes_become_commas_without_doubling_punctuation():
     assert generator._strip_em_dashes("Kickserv — since 2006") == "Kickserv, since 2006"
     # A dash straight after a full stop must not leave ". ,"
