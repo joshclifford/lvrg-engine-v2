@@ -298,6 +298,46 @@ def test_href_and_src_values_are_never_rewritten(html):
     assert generator._strip_em_dashes(html) == html
 
 
+@pytest.mark.parametrize(
+    "html,expected",
+    [
+        (
+            "<p><strong>Kickserv</strong> — field service software</p>",
+            "<p><strong>Kickserv</strong>, field service software</p>",
+        ),
+        (
+            "<li><b>Local</b> — 10,000 impressions</li>",
+            "<li><b>Local</b>, 10,000 impressions</li>",
+        ),
+        ("<p><em>Colepepper</em> — 24/7 plumbing</p>", "<p><em>Colepepper</em>, 24/7 plumbing</p>"),
+    ],
+)
+def test_dash_after_a_closing_inline_tag_keeps_its_separator(html, expected):
+    """Treating every ">" as "the dash opened a text node" deleted the dash and
+    its whitespace after </strong>, fusing the words: "Kickservfield service".
+    The label-then-dash shape is exactly what the PLANS and services sections
+    produce, so this rendered as a broken page on the offers this PR added."""
+    assert generator._strip_em_dashes(html) == expected
+
+
+def test_dash_after_an_opening_tag_still_drops(monkeypatch):
+    """The counterpart the fix must not break: here the dash really did open
+    the text node, so no comma belongs."""
+    assert generator._strip_em_dashes("<p>— Hello</p>") == "<p>Hello</p>"
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<img srcset="/a—1.jpg 1x">',
+        "<a href=/a—b>x</a>",
+        "<img data-src='/a—b.jpg'>",
+    ],
+)
+def test_srcset_and_unquoted_urls_are_protected_too(html):
+    assert generator._strip_em_dashes(html) == html
+
+
 def test_protection_is_scoped_to_the_url_not_the_whole_tag():
     assert (
         generator._strip_em_dashes('<img src="/p—1.jpg" alt="a—b">')

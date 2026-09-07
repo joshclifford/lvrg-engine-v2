@@ -834,24 +834,35 @@ _DASH_ENTITY_RE = re.compile(r"&(?:mdash|ndash|#x201[2-5]|#821[0-3]);?", re.IGNO
 # and it edited text containing no dash at all ("etc., and" lost its comma).
 _DASH_SPAN_RE = re.compile(rf"(\S)?\s*[{_DASH_CHARS}]\s*")
 
-# href/src values are left alone: a comma and a space inside a URL breaks the
-# link. Unreachable on today's pages, which carry only the fixed BOOKING_URL,
-# but it becomes reachable the moment a scraped URL lands in one of these.
+# URL-bearing attributes are left alone: a comma and a space inside a URL breaks
+# the link. Unreachable on today's pages, which carry only the fixed BOOKING_URL,
+# but it becomes reachable the moment a scraped URL lands in one of these. The
+# unquoted alternative comes last so a quoted value always wins.
 _PROTECTED_ATTR_RE = re.compile(
-    r"""\b(?:href|src)\s*=\s*(?:"[^"]*"|'[^']*')""", re.IGNORECASE
+    r"""\b(?:href|src|srcset)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE
 )
 
 
 def _dash_replacement(match: "re.Match") -> str:
+    text, start, end = match.string, match.start(), match.end()
     before = match.group(1) or ""
-    if not before or before == ">":
-        # Dash opened a text node. There is nothing for it to join.
+
+    if not before:
         return before
 
-    rest = match.string[match.end():]
+    if before == ">":
+        # A ">" ends an opening tag or a closing one, and the dash means
+        # opposite things either side of that. "<p>— Hello" opened a text node
+        # and the dash goes. "<strong>Kickserv</strong> — field service" is a
+        # separator: dropping it fused the two words with no space at all.
+        tag = text.rfind("<", 0, start)
+        if tag != -1 and text.startswith("</", tag):
+            return before + ", "
+        return before
+
     # Dash closed a text node. A comma before the tag renders as a stray one.
     # Only a CLOSING tag counts: "a — <em>b</em>" still wants its comma.
-    if not rest or rest.startswith("</"):
+    if end >= len(text) or text.startswith("</", end):
         return before
 
     if before in ".!?;:,":
