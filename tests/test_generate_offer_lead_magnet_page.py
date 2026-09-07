@@ -211,9 +211,58 @@ def test_every_advertised_number_matches_the_live_tsd_funnel(monkeypatch):
     assert "$297" in _prompt_text(captured)
 
 
+def test_offer_magnets_get_the_standalone_page_budget_not_the_fragment_one(monkeypatch):
+    """These are standalone full pages at 10-11 sections. On PAGE_MAX_TOKENS the
+    overflow truncates the tail, which is the pricing table and the CTA, and
+    _close_truncated_html then repairs it into a valid page with nothing to click."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+
+    assert captured[0]["max_tokens"] == generator.OFFER_PAGE_MAX_TOKENS
+    assert captured[0]["max_tokens"] > generator.PAGE_MAX_TOKENS
+
+
 def test_number_ranges_become_hyphens_not_commas():
     assert generator._strip_em_dashes("Open 9—5 daily") == "Open 9-5 daily"
     assert generator._strip_em_dashes("10–20 miles") == "10-20 miles"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "We serve tacos, burritos, etc., and more.",
+        "Open Mon, Fri. Closed Sun.",
+        "<style>font-family: Arial, sans-serif;</style>",
+        "Hours: 9-5, Mon to Fri",
+        "Rated 4.8 stars, 312 reviews",
+    ],
+)
+def test_text_without_a_dash_is_returned_untouched(text):
+    """The first version rewrote punctuation globally after the swap, so
+    "etc., and" came back as "etc. and" with no dash anywhere in the input."""
+    assert generator._strip_em_dashes(text) == text
+
+
+@pytest.mark.parametrize(
+    "char", ["‒", "–", "—", "―"]
+)
+def test_every_dash_character_is_covered_not_just_em_and_en(char):
+    assert char not in generator._strip_em_dashes(f"left {char} right")
+
+
+@pytest.mark.parametrize(
+    "entity", ["&mdash;", "&ndash;", "&#8212;", "&#8211;", "&#x2014;", "&#X2014;", "&#8212"]
+)
+def test_entity_spellings_including_uppercase_hex_and_missing_semicolon(entity):
+    out = generator._strip_em_dashes(f"left {entity} right")
+    assert "&" not in out
+    assert not any(c in out for c in "‒–—―")
+
+
+def test_dash_opening_a_text_node_does_not_leave_a_leading_comma():
+    assert generator._strip_em_dashes("<p>— Hello</p>") == "<p>Hello</p>"
 
 
 def test_prose_dashes_become_commas_without_doubling_punctuation():

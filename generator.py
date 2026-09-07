@@ -33,6 +33,15 @@ SITE_MAX_TOKENS = int(os.environ.get("SITE_MAX_TOKENS", "32000"))
 # footer) in one shot, but one page of a multi-page build covers far fewer.
 PAGE_MAX_TOKENS = int(os.environ.get("PAGE_MAX_TOKENS", "14000"))
 
+# Ceiling for a Get Listed / Sponsored Story lead magnet. These are STANDALONE
+# full pages, so they belong with SITE_MAX_TOKENS, not with the multi-page
+# fragment budget above. They ran on PAGE_MAX_TOKENS until 7 Sep 2026, when the
+# two magnets grew to 11 and 10 sections: overflow truncates the TAIL, which is
+# now the three-tier pricing table and the CTA, and _close_truncated_html
+# repairs the markup so the page still renders. That failure is silent and it
+# ships a preview with nothing to click.
+OFFER_PAGE_MAX_TOKENS = int(os.environ.get("OFFER_PAGE_MAX_TOKENS", str(SITE_MAX_TOKENS)))
+
 # How many pages of a multi-page build to generate at once (24 Aug 2026,
 # POD01-53 follow-up). Generating them one at a time — 4 sequential Claude
 # calls for a 4-page build — is what pushed real builds past leadscraper's
@@ -812,9 +821,29 @@ Start with <!DOCTYPE html>"""
     return html
 
 
-# Entity spellings the model reaches for when it wants a dash without typing one.
-# Normalized to the literal character first so one pass catches every spelling.
-_DASH_ENTITIES = ("&mdash;", "&ndash;", "&#8212;", "&#8211;", "&#x2014;", "&#x2013;")
+# U+2012 figure dash through U+2015 horizontal bar: every character that reads
+# as an em/en dash, not just the two a model reaches for most.
+_DASH_CHARS = "‒–—―"
+
+# The same four as HTML entities, named or numeric, hex or decimal, and tolerant
+# of the missing semicolon a model sometimes emits.
+_DASH_ENTITY_RE = re.compile(r"&(?:mdash|ndash|#x201[2-5]|#821[0-3]);?", re.IGNORECASE)
+
+# Captures the character before the dash so the swap can see its own context in
+# one pass. Rewriting punctuation globally afterwards was the earlier approach
+# and it edited text containing no dash at all ("etc., and" lost its comma).
+_DASH_SPAN_RE = re.compile(rf"(\S)?\s*[{_DASH_CHARS}]\s*")
+
+
+def _dash_replacement(match: "re.Match") -> str:
+    before = match.group(1) or ""
+    if not before or before == ">":
+        # Dash opened a text node. There is nothing for it to join.
+        return before
+    if before in ".!?;:,":
+        # Punctuation already does the comma's job.
+        return before + " "
+    return before + ", "
 
 
 def _strip_em_dashes(html: str) -> str:
@@ -824,18 +853,11 @@ def _strip_em_dashes(html: str) -> str:
 
     Runs before photo inlining so it never walks a base64 data URI.
     """
-    for entity in _DASH_ENTITIES:
-        html = html.replace(entity, "—")
-
+    html = _DASH_ENTITY_RE.sub("—", html)
     # A dash between digits is a range, not punctuation: "10—20" is "10-20".
-    html = re.sub(r"(?<=\d)\s*[—–]\s*(?=\d)", "-", html)
+    html = re.sub(rf"(?<=\d)\s*[{_DASH_CHARS}]\s*(?=\d)", "-", html)
     # Everything else was doing a comma's job.
-    html = re.sub(r"\s*[—–]\s*", ", ", html)
-    # Tidy what the swap leaves: ", ,"  ", ." and " ,".
-    html = re.sub(r",\s*,", ",", html)
-    html = re.sub(r"\s+,", ",", html)
-    html = re.sub(r"([.!?;:])\s*,", r"\1", html)
-    return html
+    return _DASH_SPAN_RE.sub(_dash_replacement, html)
 
 
 # ── Get Listed / Sponsored Story lead magnets ───────────────────────────────
@@ -1032,14 +1054,14 @@ Start with <!DOCTYPE html>"""
     with client.messages.stream(
         model="claude-sonnet-5",
         thinking=NO_THINKING,
-        max_tokens=PAGE_MAX_TOKENS,
+        max_tokens=OFFER_PAGE_MAX_TOKENS,
         messages=[{"role": "user", "content": page_prompt}],
     ) as stream:
         response = stream.get_final_message()
     cost.record(meter, f"offer_page:{offer}", "claude-sonnet-5", response)
 
     if response.stop_reason == "max_tokens":
-        print(f"  [generator] WARNING: hit max_tokens ({PAGE_MAX_TOKENS}) on a {offer} lead magnet for {intel['business_name']} — may be cut short")
+        print(f"  [generator] WARNING: hit max_tokens ({OFFER_PAGE_MAX_TOKENS}) on a {offer} lead magnet for {intel['business_name']} — may be cut short")
 
     html = first_text(response).strip()
     html = _strip_markdown_fences(html)
