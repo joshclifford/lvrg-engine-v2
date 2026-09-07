@@ -812,6 +812,32 @@ Start with <!DOCTYPE html>"""
     return html
 
 
+# Entity spellings the model reaches for when it wants a dash without typing one.
+# Normalized to the literal character first so one pass catches every spelling.
+_DASH_ENTITIES = ("&mdash;", "&ndash;", "&#8212;", "&#8211;", "&#x2014;", "&#x2013;")
+
+
+def _strip_em_dashes(html: str) -> str:
+    """Enforce the no-em-dash rule the prompt asks for. The prompt asks; a model
+    under a long structure spec still slips. Offer magnets only, so the Free
+    Website generator's voice is untouched.
+
+    Runs before photo inlining so it never walks a base64 data URI.
+    """
+    for entity in _DASH_ENTITIES:
+        html = html.replace(entity, "—")
+
+    # A dash between digits is a range, not punctuation: "10—20" is "10-20".
+    html = re.sub(r"(?<=\d)\s*[—–]\s*(?=\d)", "-", html)
+    # Everything else was doing a comma's job.
+    html = re.sub(r"\s*[—–]\s*", ", ", html)
+    # Tidy what the swap leaves: ", ,"  ", ." and " ,".
+    html = re.sub(r",\s*,", ",", html)
+    html = re.sub(r"\s+,", ",", html)
+    html = re.sub(r"([.!?;:])\s*,", r"\1", html)
+    return html
+
+
 # ── Get Listed / Sponsored Story lead magnets ───────────────────────────────
 # Reuse the exact scrape → AI-mockup → gotheresandiego.com → chat-widget
 # pipeline the Free Website magnet already proves out. Only the prompt
@@ -832,6 +858,20 @@ GET_LISTED_VERTICAL_FRAMING = {
     "contractor": (
         "an independent contractor",
         "their trade specialty, past project photos, and service area",
+    ),
+    # TSD's own funnel names restaurants, coffee shops and retail as the target
+    # for Get Listed; without these they fell through to the generic framing.
+    "restaurant": (
+        "a local restaurant",
+        "their menu standouts, the room and the neighborhood, and what regulars keep coming back for",
+    ),
+    "cafe": (
+        "a neighborhood coffee shop",
+        "what they roast or pour, the room, and who fills it in the morning",
+    ),
+    "retail": (
+        "a local shop",
+        "what they stock, what is hard to find anywhere else, and the street they sit on",
     ),
 }
 
@@ -865,39 +905,78 @@ def generate_offer_lead_magnet_page(
         role, detail_hint = GET_LISTED_VERTICAL_FRAMING.get(
             vertical, ("a local business", "their services and what makes them worth choosing")
         )
-        page_purpose = f"""This is a MOCK-UP of how {intel['business_name']} — {role} — would look
+        page_purpose = f"""This is a MOCK-UP of how {intel['business_name']}, {role}, would look
 featured in the ThereSanDiego.com business directory, as a personalized preview to close a
 Get Listed ($297 one-time, permanent profile) prospect. Build it around {detail_hint}.
 
 STRUCTURE (this is a directory profile mock-up, not a full website):
-1. CLAIM BAR — sticky, same as every LVRG preview:
-   "This is a preview of your ThereSanDiego.com listing" + gold pill "Claim This Listing →" linking to {BOOKING_URL}
-2. PROFILE HEADER — business name, {role} framing, location/neighborhood, primary photo
-3. ABOUT — 2-3 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice
-4. WHY LIST HERE — 3 short points: permanent page (no monthly fee), SEO-optimized so San Diegans searching for what you offer find you, person+business schema (nobody else tells Google who you are as the person behind the business)
-5. GALLERY — real photos if provided, otherwise omit
-6. TESTIMONIALS — ONLY real review quotes provided, verbatim. If none, omit entirely.
-7. CTA — "Claim this listing for $297, one time, permanent" driving to {BOOKING_URL}
-8. FOOTER — location, phone, hours"""
+1. CLAIM BAR: sticky, same as every LVRG preview.
+   "This is a preview of your ThereSanDiego.com listing" plus gold pill "Claim This Listing →" linking to {BOOKING_URL}
+2. PROFILE HEADER: business name, {role} framing, location and neighborhood, primary photo.
+   If a rating was supplied above, show it here as a star stat next to the name.
+3. ABOUT: 2-3 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice.
+   Work in what they want visitors to do, and speak to where they currently struggle,
+   without ever naming the struggle as a criticism of them.
+4. WHAT THEY OFFER: their real services as a short scannable list, grouped sensibly.
+   Use only the services given above. If none were listed, omit this section.
+5. AT A GLANCE: a compact fact panel built ONLY from real data given above.
+   Neighborhood, hours, phone, and rating, each shown only if present. Omit the panel entirely
+   if fewer than two of them exist. Never write "Not listed" on the page.
+6. WHY LIST HERE: short points, every one of them confirmed on TSD's own funnel.
+   Permanent page, no monthly fee, no expiration. Live within 5 business days.
+   SEO-optimized so San Diegans searching for what you offer find you.
+   Website, menu, reservations and socials all linked in one place.
+   Send us your photos and we format and publish them for you.
+   Person and business schema, so Google is told who you are as the person behind the business.
+7. WHERE THIS SITS: one short line placing the profile in context, that it lives on a
+   local guide 70,000+ San Diegans read every month, not on a pay-to-play directory.
+8. GALLERY: real photos if provided, otherwise omit.
+9. SOCIAL PROOF: if a rating and review count were supplied above, show them as a stat.
+   You have NO review text. Never write a testimonial quote. If no rating, omit this section.
+10. CTA: "Claim this listing for $297, one time, permanent. Live in 5 business days."
+   plus a quieter second line: "The $297 comes off your first Sponsored Story if you upgrade later."
+   Both drive to {BOOKING_URL}
+11. FOOTER: location, phone, hours."""
     elif offer == "sponsored_story":
+        # Do not price this off First Look. First Look ($197 one-time) is a SOCIAL
+        # plan, an Instagram post rather than an article, and sits on /social-plans.
+        # Sponsored Stories are monthly and start at $497. Verified 7 Sep 2026.
         page_purpose = f"""This is a MOCK-UP of a Sponsored Story: a short editorial feature as it would
 run on ThereSanDiego.com and get promoted to their 70,000+ monthly audience, built to close an
-Advertising prospect via the $197 First Look entry offer.
+Advertising prospect on a Sponsored Story plan, of which LOCAL at $497/month is the entry tier.
 
 STRUCTURE (this is an editorial feature mock-up, not a full website):
-1. CLAIM BAR — sticky, same as every LVRG preview:
-   "This is a preview of your Sponsored Story" + gold pill "Claim This Feature →" linking to {BOOKING_URL}
-2. ARTICLE HEADER — a real editorial-style headline about {intel['business_name']} (not a generic "About Us" title), byline "There San Diego Staff", hero photo if provided
-3. THE STORY — 3-4 short paragraphs written in ThereSanDiego's warm, locals-know-locals editorial voice, using their REAL description/services/neighborhood — this should read like a real feature article a San Diegan would actually enjoy reading, not an ad
-4. PULL QUOTE — one real review quote if provided, styled as an editorial pull-quote. If none, omit.
-5. GUARANTEE CALLOUT — "Every Sponsored Story comes with guaranteed impressions. If we don't hit the number, we keep promoting until we do." + "First Look: $197 one-time, puts you in front of the audience so you can see what it does."
-6. CTA — driving to {BOOKING_URL}
-7. FOOTER — location, phone, hours"""
+1. CLAIM BAR: sticky, same as every LVRG preview.
+   "This is a preview of your Sponsored Story" plus gold pill "Claim This Feature →" linking to {BOOKING_URL}
+2. ARTICLE HEADER: a real editorial-style headline about {intel['business_name']}, never a generic
+   "About Us" title. Byline "There San Diego Staff", a dateline reading "San Diego", hero photo if provided.
+3. THE STORY: 4-5 short paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice,
+   using their REAL description, services and neighborhood. It should read like a feature a San Diegan
+   would actually enjoy, not an ad. Cover, in this order: what the place is and where it sits,
+   what they actually do best drawn from their real services, what makes it worth the trip,
+   and what a first-time visitor should do. Weave in what they want visitors to do as the closing beat.
+4. THE DETAILS: a short editorial fact box beside or under the story, built ONLY from real data above.
+   Neighborhood, hours, phone, and rating, each only if present. Omit the box if fewer than two exist.
+   Never print "Not listed" or an empty row.
+5. SOCIAL PROOF: if a rating and review count were supplied above, work the stat into the story or the
+   fact box. You have NO review text, so never write a pull quote or a testimonial. If no rating, omit.
+6. GUARANTEE CALLOUT: "Every Sponsored Story comes with guaranteed impressions. If we don't hit the number, we keep promoting until we do."
+7. REACH: a short stat strip using ThereSanDiego's real audience numbers.
+   70,000+ monthly visitors, 700,000+ monthly reach, 25,000 newsletter subscribers,
+   82,000 social followers across Facebook and Instagram. Do not inflate or invent any of these.
+8. PLANS: the three real tiers, as three simple cards. State the monthly price plainly.
+   These are MONTHLY plans and must never be shown as a one-time fee.
+   - LOCAL, $497/month, 10,000 guaranteed impressions a month, neighborhood targeting, one story per quarter
+   - CITYWIDE, $997/month, 25,000 guaranteed impressions a month, the full San Diego metro, one story per month
+   - COUNTYWIDE, $1,500/month, 50,000 guaranteed impressions a month, all of San Diego County, one story per month
+   Under the cards, one line: "Every plan includes ad campaign management and geo, age and demographic targeting. Organic impressions are never charged."
+9. CTA: driving to {BOOKING_URL}
+10. FOOTER: location, phone, hours."""
     else:
         raise ValueError(f"Unknown offer for generate_offer_lead_magnet_page: {offer!r}")
 
     page_prompt = f"""You are building a personalized lead-magnet PREVIEW PAGE for {intel['business_name']}.
-This is NOT a full business website — see the specific structure below for what it actually is.
+This is NOT a full business website. See the specific structure below for what it actually is.
 
 ━━━ BUSINESS INTEL ━━━
 - Business: {intel['business_name']}
@@ -909,6 +988,8 @@ This is NOT a full business website — see the specific structure below for wha
 - Neighborhood: {intel.get('neighborhood', '')}
 - Phone: {intel.get('phone', 'Not listed')}
 - Hours: {intel.get('hours', 'Not listed')}
+- What they want visitors to do: {intel.get('cta_angle') or 'Get in touch'}
+- Where they currently struggle: {_pain_point_context(intel, None) or 'Not identified'}
 - Brand vibe: {intel.get('brand_vibe', 'clean, modern')}
 - Primary color: {intel.get('primary_color', '#333')}
 
@@ -922,7 +1003,7 @@ This is NOT a full business website — see the specific structure below for wha
 {social_block}
 
 ━━━ TECH STACK ━━━
-Use Tailwind CSS via CDN — include this in <head>:
+Use Tailwind CSS via CDN. Include this in <head>:
   <script src="https://cdn.tailwindcss.com"></script>
   <script>tailwind.config = {{ theme: {{ extend: {{ colors: {{ brand: '{intel.get('primary_color','#f59e0b')}' }} }} }} }}</script>
 Use Google Fonts matching the brand vibe above.
@@ -933,9 +1014,15 @@ NO inline style= attributes. Use Tailwind classes exclusively.
 
 ━━━ COPY RULES ━━━
 - Reference {intel.get('neighborhood') or intel.get('location','').split(',')[0]} naturally
-- NEVER write fake testimonials — if no real reviews, skip quotes entirely
+- NEVER write fake testimonials. If no real reviews, skip quotes entirely
 - NEVER invent pricing beyond what's given above
-- Single page, no nav to other pages — this is a standalone lead magnet, not a multi-page site
+- Single page, no nav to other pages. This is a standalone lead magnet, not a multi-page site
+- NO EM-DASHES anywhere in the copy. Do not use the character "—" or "–". Use a full stop,
+  a comma, or a colon instead. This applies to headings, body copy, captions and buttons.
+- Avoid the AI tells: "elevate", "unlock", "seamless", "in today's world", "nestled",
+  "whether you're ... or ...", "it's not just X, it's Y". Write the way a local writer would
+- Only state facts given in the intel above. If a detail is missing, leave it out rather than
+  filling the gap with a plausible guess
 
 ━━━ OUTPUT ━━━
 Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).
@@ -957,6 +1044,7 @@ Start with <!DOCTYPE html>"""
     html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
+    html = _strip_em_dashes(html)
     html = _inline_photo_assets(html, photo_assets)
     return html
 
