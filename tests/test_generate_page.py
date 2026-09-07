@@ -137,3 +137,20 @@ def test_page_max_tokens_used_not_site_max_tokens(monkeypatch):
 
     assert captured[0]["max_tokens"] == generator.PAGE_MAX_TOKENS
     assert captured[0]["max_tokens"] < generator.SITE_MAX_TOKENS
+
+
+def test_em_dash_strip_is_scoped_to_offer_magnets_not_this_generator(monkeypatch):
+    """The no-em-dash rule is a Get Listed / Sponsored Story requirement. The
+    Free Website generator keeps its own voice, so _strip_em_dashes must not
+    creep into this path."""
+    dirty = "<!DOCTYPE html><html><body><h1>Acme Dental \u2014 North Park</h1></body></html>"
+    captured = []
+    monkeypatch.setattr(
+        generator, "_get_client", lambda **k: _mock_client(captured, html=dirty)
+    )
+
+    design = generator._get_design_personality("other")
+    nav = _nav_plan()
+    result = generator.generate_page(_rich_intel(), design, nav[0], nav)
+
+    assert "\u2014" in result
