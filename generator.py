@@ -973,6 +973,12 @@ def generate_offer_lead_magnet_page(
     press_block = _build_press_block(intel)
     social_block = _build_social_block(intel)
 
+    # Their real page, not the bare root. A business living inside a larger
+    # site shares a domain with its parent, so the root is somebody else's
+    # homepage (POD01-34). Falls back to the domain when there is no path,
+    # which is every ordinary root-domain lead.
+    own_site_url = intel.get("page_url") or f"https://{intel['domain']}"
+
     if offer == "get_listed":
         role, detail_hint = GET_LISTED_VERTICAL_FRAMING.get(
             vertical, ("a local business", "their services and what makes them worth choosing")
@@ -989,19 +995,19 @@ STRUCTURE (this is a directory profile mock-up, not a full website):
 3. ABOUT: 4-6 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice, broken into
    two short paragraphs rather than one block. Work in what they want visitors to do, and speak to
    where they currently struggle, without ever naming the struggle as a criticism of them.
-   Link the business name inline to https://{intel['domain']} the first time it appears here.
+   Link the business name inline to {own_site_url} the first time it appears here.
 3b. FEATURE IMAGE: if photos were supplied, place one full-width between ABOUT and WHAT THEY OFFER,
    with a short caption drawn from their real content. Never a stock image, never a placeholder.
 4. WHAT THEY OFFER: their real services as a short scannable list, grouped sensibly, two columns on
    desktop. Use only the services given above. If none were listed, omit this section.
    Follow it with a SECOND photo if two or more were supplied.
 5. AT A GLANCE: a compact fact panel built ONLY from real data given above.
-   Neighborhood, hours, phone, rating, and a "Visit website" link to https://{intel['domain']},
+   Neighborhood, hours, phone, rating, and a "Visit website" link to {own_site_url},
    each shown only if present. Omit the panel entirely if fewer than two of them exist.
    Never write "Not listed" on the page.
 5b. LINKS BACK TO THEIR SITE: "links to your website, menu, reservations and social profiles" is
    one of the things the $297 profile is sold on, so the mockup has to demonstrate it. Carry at
-   least TWO links to https://{intel['domain']}: the inline one in ABOUT and the fact-panel one.
+   least TWO links to {own_site_url}: the inline one in ABOUT and the fact-panel one.
    Use their real domain exactly as given, never a placeholder. If socials were supplied, link
    those in the footer. Never add rel="nofollow".
 6. WHY LIST HERE: short points, every one of them confirmed on TSD's own funnel.
@@ -1082,6 +1088,7 @@ STRUCTURE (this is an editorial feature mock-up, not a full website):
     # the profile does.
     min_own_links = 3 if offer == "sponsored_story" else 2
 
+
     page_prompt = f"""You are building a personalized lead-magnet PREVIEW PAGE for {intel['business_name']}.
 This is NOT a full business website. See the specific structure below for what it actually is.
 
@@ -1119,13 +1126,15 @@ NO inline style= attributes. Use Tailwind classes exclusively.
 ━━━ REQUIRED LINKS ━━━
 Two different destinations. Do not confuse them, and do not let one stand in for the other.
 
-1. THE BUSINESS'S OWN WEBSITE: https://{intel['domain']}
+1. THE BUSINESS'S OWN WEBSITE: {own_site_url}
    This is the one that was missing, and it is the one being sold. A Sponsored Story is bought
    for "links back to your website"; a Get Listed profile is bought for "links to your website,
    menu, reservations and social profiles". A page that names the business and never links to it
    has failed to demonstrate the product.
    MINIMUM {min_own_links} links to this URL, in the positions named below.
-   Use it verbatim. Never example.com, never "#", never a link to ThereSanDiego instead.
+   Use it VERBATIM, including any path. The path is often what separates this business from
+   whoever owns the root domain, so trimming it can point the prospect at a different company.
+   Never example.com, never "#", never a link to ThereSanDiego instead.
    Style them as ordinary editorial links. Never rel="nofollow": the link counting is the point.
 
 2. THE BOOKING PAGE: {BOOKING_URL}
@@ -1151,7 +1160,7 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
   "whether you're ... or ...", "it's not just X, it's Y". Write the way a local writer would
 - Only state facts given in the intel above. If a detail is missing, leave it out rather than
   filling the gap with a plausible guess
-- LINK TO https://{intel['domain']} using their real domain, never example.com and never "#".
+- LINK TO {own_site_url} using their real URL, never example.com and never "#".
   The links are the product here, not decoration: a Sponsored Story is sold on the backlinks it
   carries, and the Get Listed profile is sold on gathering every link in one place. A page that
   mentions the business and never links to it has failed to demonstrate the thing being bought

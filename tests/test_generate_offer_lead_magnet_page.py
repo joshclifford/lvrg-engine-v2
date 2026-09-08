@@ -596,3 +596,46 @@ def test_too_few_backlinks_warns_but_still_returns_the_page(monkeypatch, capsys)
     warning = capsys.readouterr().out
     assert "carries 0 link(s)" in warning
     assert "expected at least 3" in warning
+
+
+# ── link to THEIR page, not the root ────────────────────────────────────────
+# Su Pan Bakery is stored as https://supanbakery.com/en/ and the backlink went
+# to the bare root. Harmless there, but it is POD01-34 in link form: when a
+# business lives inside a larger site the root belongs to the PARENT, and the
+# "visit their website" link sends the prospect to the wrong company.
+
+def test_backlink_uses_the_leads_own_page_when_it_has_a_path(monkeypatch):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    intel = _intel()
+    intel["domain"] = "supanbakery.com"
+    intel["page_url"] = "https://supanbakery.com/en/"
+    generator.generate_offer_lead_magnet_page("get_listed", intel)
+
+    prompt = _prompt_text(captured)
+    assert "https://supanbakery.com/en/" in prompt
+    assert "Use it VERBATIM, including any path" in prompt
+
+
+def test_root_domain_leads_still_link_to_the_domain(monkeypatch):
+    """No path means no change: the overwhelming majority of leads."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    intel = _intel()
+    intel["domain"] = "acme.com"
+    generator.generate_offer_lead_magnet_page("sponsored_story", intel)
+
+    prompt = _prompt_text(captured)
+    assert "https://acme.com" in prompt
+
+
+def test_a_path_link_still_counts_toward_the_backlink_minimum():
+    """The counter compares hosts, so a link carrying the lead's path must not
+    be missed just because it is not the bare root."""
+    html = (
+        '<a href="https://supanbakery.com/en/">Su Pan Bakery</a>'
+        '<a href="https://supanbakery.com/en/menu">the pan dulce</a>'
+    )
+    assert generator._count_own_domain_links(html, "supanbakery.com") == 2

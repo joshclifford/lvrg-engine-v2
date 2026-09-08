@@ -496,6 +496,19 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         intel = await loop.run_in_executor(
             None, lambda: scrape_site(domain, page_url, meter=meter)
         )
+        # The lead's OWN page, kept for the generator to link to.
+        #
+        # scrape_site takes page_url and then throws it away, so the only URL
+        # the generator ever saw was the bare domain. That is the POD01-34
+        # problem in link form: when a business lives inside a larger site, the
+        # root belongs to the PARENT, and a "visit their website" link pointing
+        # at it sends the prospect to the charity, the hospital group or the
+        # franchise head office instead of to them.
+        #
+        # Only set when there is a path to carry, so a root-domain lead is
+        # byte-identical to before and the generator falls back to the domain.
+        if page_url:
+            intel["page_url"] = page_url
         # Lift the downloaded photo bytes straight off the dict, BEFORE `intel`
         # is emitted or stored anywhere (POD01-124). Three lines below it goes
         # out over SSE, and further down into result_payload — from where
