@@ -983,14 +983,24 @@ STRUCTURE (this is a directory profile mock-up, not a full website):
    "This is a preview of your ThereSanDiego.com listing" plus gold pill "Claim This Listing →" linking to {BOOKING_URL}
 2. PROFILE HEADER: business name, {role} framing, location and neighborhood, primary photo.
    If a rating was supplied above, show it here as a star stat next to the name.
-3. ABOUT: 2-3 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice.
-   Work in what they want visitors to do, and speak to where they currently struggle,
-   without ever naming the struggle as a criticism of them.
-4. WHAT THEY OFFER: their real services as a short scannable list, grouped sensibly.
-   Use only the services given above. If none were listed, omit this section.
+3. ABOUT: 4-6 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice, broken into
+   two short paragraphs rather than one block. Work in what they want visitors to do, and speak to
+   where they currently struggle, without ever naming the struggle as a criticism of them.
+   Link the business name inline to https://{intel['domain']} the first time it appears here.
+3b. FEATURE IMAGE: if photos were supplied, place one full-width between ABOUT and WHAT THEY OFFER,
+   with a short caption drawn from their real content. Never a stock image, never a placeholder.
+4. WHAT THEY OFFER: their real services as a short scannable list, grouped sensibly, two columns on
+   desktop. Use only the services given above. If none were listed, omit this section.
+   Follow it with a SECOND photo if two or more were supplied.
 5. AT A GLANCE: a compact fact panel built ONLY from real data given above.
-   Neighborhood, hours, phone, and rating, each shown only if present. Omit the panel entirely
-   if fewer than two of them exist. Never write "Not listed" on the page.
+   Neighborhood, hours, phone, rating, and a "Visit website" link to https://{intel['domain']},
+   each shown only if present. Omit the panel entirely if fewer than two of them exist.
+   Never write "Not listed" on the page.
+5b. LINKS BACK TO THEIR SITE: "links to your website, menu, reservations and social profiles" is
+   one of the things the $297 profile is sold on, so the mockup has to demonstrate it. Carry at
+   least TWO links to https://{intel['domain']}: the inline one in ABOUT and the fact-panel one.
+   Use their real domain exactly as given, never a placeholder. If socials were supplied, link
+   those in the footer. Never add rel="nofollow".
 6. WHY LIST HERE: short points, every one of them confirmed on TSD's own funnel.
    Permanent page, no monthly fee, no expiration. Live within 5 business days.
    SEO-optimized so San Diegans searching for what you offer find you.
@@ -1001,7 +1011,8 @@ STRUCTURE (this is a directory profile mock-up, not a full website):
    local guide 70,000+ San Diegans read every month, not on a pay-to-play directory.
 8. GALLERY: real photos if provided, otherwise omit.
 9. SOCIAL PROOF: if a rating and review count were supplied above, show them as a stat.
-   You have NO review text. Never write a testimonial quote. If no rating, omit this section.
+   You have NO review text. NEVER ATTRIBUTE A QUOTE TO A CUSTOMER and never invent a testimonial.
+   If no rating, omit this section.
 10. CTA: "Claim this listing for $297, one time, permanent. Live in 5 business days."
    plus a quieter second line: "The $297 comes off your first Sponsored Story if you upgrade later."
    Both drive to {BOOKING_URL}
@@ -1019,16 +1030,36 @@ STRUCTURE (this is an editorial feature mock-up, not a full website):
    "This is a preview of your Sponsored Story" plus gold pill "Claim This Feature →" linking to {BOOKING_URL}
 2. ARTICLE HEADER: a real editorial-style headline about {intel['business_name']}, never a generic
    "About Us" title. Byline "There San Diego Staff", a dateline reading "San Diego", hero photo if provided.
-3. THE STORY: 4-5 short paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice,
-   using their REAL description, services and neighborhood. It should read like a feature a San Diegan
-   would actually enjoy, not an ad. Cover, in this order: what the place is and where it sits,
-   what they actually do best drawn from their real services, what makes it worth the trip,
-   and what a first-time visitor should do. Weave in what they want visitors to do as the closing beat.
+3. THE STORY: 7-9 paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice, using their
+   REAL description, services and neighborhood. It should read like a feature a San Diegan would
+   actually enjoy, not an ad. Break it up so it scans like a magazine piece rather than a wall of text:
+   - Two or three SUBHEADINGS between sections, written as real editorial lines, never "About" or "Services"
+   - One PULL QUOTE styled large and set apart. It must be drawn from THEIR OWN description or services,
+     never attributed to a customer and never in quotation marks as if someone said it
+   - Photos placed BETWEEN paragraphs, not all stacked at the top. See the photo rule below.
+   Cover, in this order: what the place is and where it sits, the story of how it came to be if their
+   own content supports it, what they actually do best drawn from their real services, what makes it
+   worth the trip, what a first-time visitor should do, and a closing beat built on what they want
+   visitors to do. Never pad: if their content does not support nine paragraphs, write seven good ones
+   rather than nine with filler.
 4. THE DETAILS: a short editorial fact box beside or under the story, built ONLY from real data above.
-   Neighborhood, hours, phone, and rating, each only if present. Omit the box if fewer than two exist.
-   Never print "Not listed" or an empty row.
+   Neighborhood, hours, phone, rating, and a link to their website, each only if present. Omit the box
+   if fewer than two exist. Never print "Not listed" or an empty row.
 5. SOCIAL PROOF: if a rating and review count were supplied above, work the stat into the story or the
-   fact box. You have NO review text, so never write a pull quote or a testimonial. If no rating, omit.
+   fact box. You have NO review text.
+   NEVER ATTRIBUTE A QUOTE TO A CUSTOMER and never invent a testimonial, in this section or the pull
+   quote above. The pull quote is THEIR OWN words about themselves, set large. That is editorial.
+   A sentence in quotation marks with a customer's name under it is fabricated evidence.
+   If no rating, omit this section.
+5b. LINKS BACK TO THEIR SITE: this is not decoration, it is the product. A Sponsored Story is sold on
+   "published on ThereSanDiego.com with links back to your website", and the SEO value of the placement
+   IS those links. The page must carry at least THREE, all pointing at https://{intel['domain']}:
+   - the business name in the FIRST paragraph, linked inline
+   - one contextual link mid-article on a real phrase, for example their signature service or menu
+   - one in the fact box or the closing paragraph, reading as a plain invitation to visit their site
+   Use their real domain exactly as given. Style them as normal editorial links, underlined or coloured,
+   never as buttons. Never add rel="nofollow": the whole point of the placement is that the link counts.
+   If their socials were supplied, link those too, in the footer only.
 6. GUARANTEE CALLOUT: "Every Sponsored Story comes with guaranteed impressions. If we don't hit the number, we keep promoting until we do."
 7. REACH: a short stat strip using ThereSanDiego's real audience numbers.
    70,000+ monthly visitors, 700,000+ monthly reach, 25,000 newsletter subscribers,
@@ -1092,6 +1123,16 @@ NO inline style= attributes. Use Tailwind classes exclusively.
   "whether you're ... or ...", "it's not just X, it's Y". Write the way a local writer would
 - Only state facts given in the intel above. If a detail is missing, leave it out rather than
   filling the gap with a plausible guess
+- LINK TO https://{intel['domain']} using their real domain, never example.com and never "#".
+  The links are the product here, not decoration: a Sponsored Story is sold on the backlinks it
+  carries, and the Get Listed profile is sold on gathering every link in one place. A page that
+  mentions the business and never links to it has failed to demonstrate the thing being bought
+- PHOTO PLACEMENT: spread the supplied photos through the page, one after the header and the rest
+  BETWEEN sections or paragraphs. Never stack them all at the top and never end on a photo wall.
+  Use ONLY the photo URLs given above, in the order given. If none were supplied, write the page
+  without images and do NOT substitute stock photography, an illustration, a solid colour block or
+  an emoji standing in for a picture. A clean page with no image beats an obvious placeholder on a
+  mockup carrying the prospect's own branding
 
 ━━━ OUTPUT ━━━
 Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).

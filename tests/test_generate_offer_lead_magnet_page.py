@@ -384,15 +384,22 @@ def test_prose_dashes_become_commas_without_doubling_punctuation():
 
 @pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
 def test_neither_offer_asks_for_testimonial_quotes(monkeypatch, offer):
-    """intel["reviews"] is never populated, so a quote section could only be
-    filled by inventing one. Rating stats are fine; quotes are not."""
+    """intel["reviews"] is never populated, so a CUSTOMER quote could only be
+    filled by inventing one.
+
+    The Sponsored Story does now ask for a pull quote (PM review, 8 Sep 2026).
+    That is deliberate and safe: it is the business's own copy set large, which
+    is ordinary editorial. What stays banned is attribution to a person, which
+    is what turns a design flourish into fabricated evidence. This test pins the
+    attribution rule rather than the words "pull quote"."""
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
     generator.generate_offer_lead_magnet_page(offer, _intel())
 
     prompt = _prompt_text(captured)
-    assert "PULL QUOTE" not in prompt
+    assert "NEVER ATTRIBUTE A QUOTE TO A CUSTOMER" in prompt
+    assert "never invent a testimonial" in prompt
     assert "TESTIMONIALS" not in prompt
 
 
@@ -409,3 +416,87 @@ def test_no_nav_or_multi_page_language_since_this_is_a_standalone_page(monkeypat
 
     prompt = _prompt_text(captured)
     assert "no nav to other pages" in prompt.lower()
+
+
+# ── backlinks and layout (PM review, 8 Sep 2026) ─────────────────────────────
+# The Sponsored Story shipped with no link to the prospect's own site at all,
+# on an offer sold as "published on ThereSanDiego.com with links back to your
+# website". The backlink IS the product; the page was demonstrating everything
+# except the part being bought.
+
+@pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
+def test_both_offers_are_told_to_link_to_the_prospects_real_domain(monkeypatch, offer):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    intel = _intel()
+    intel["domain"] = "mayamooncollective.com"
+    generator.generate_offer_lead_magnet_page(offer, intel)
+
+    prompt = _prompt_text(captured)
+    assert "https://mayamooncollective.com" in prompt
+    # The rule has to say the links matter, not just that they exist.
+    assert "never example.com" in prompt
+    assert 'never add rel="nofollow"' in prompt.lower()
+
+
+def test_sponsored_story_asks_for_three_backlinks_in_named_positions(monkeypatch):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+
+    prompt = _prompt_text(captured)
+    assert "at least THREE" in prompt
+    assert "FIRST paragraph" in prompt
+
+
+def test_sponsored_story_is_longer_than_the_five_paragraphs_the_pm_saw(monkeypatch):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+
+    prompt = _prompt_text(captured)
+    assert "7-9 paragraphs" in prompt
+    # Length alone is padding; the structure is what makes it readable.
+    assert "SUBHEADINGS" in prompt
+    assert "PULL QUOTE" in prompt
+
+
+@pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
+def test_photos_are_spread_through_the_page_not_stacked_on_top(monkeypatch, offer):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page(offer, _intel())
+
+    prompt = _prompt_text(captured)
+    assert "BETWEEN sections or paragraphs" in prompt
+
+
+@pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
+def test_no_stock_photo_fallback_when_the_lead_has_none(monkeypatch, offer):
+    """A mockup carries the prospect's own branding. An obvious placeholder
+    reads worse than no image at all."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page(offer, _intel())
+
+    prompt = _prompt_text(captured)
+    assert "do NOT substitute stock photography" in prompt
+
+
+def test_pull_quote_is_still_never_attributed_to_a_customer(monkeypatch):
+    """The Sponsored Story now asks for a pull quote, which is the exact shape
+    the invented-testimonial guard exists to stop. It must be drawn from their
+    own copy, not put in a customer's mouth."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+
+    prompt = _prompt_text(captured)
+    assert "NEVER ATTRIBUTE A QUOTE TO A CUSTOMER" in prompt
+    assert "THEIR OWN words about themselves" in prompt
