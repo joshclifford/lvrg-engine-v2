@@ -538,7 +538,10 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         # the same for chain branches, which share a domain AND have no path.
         # Both empty for an ordinary root-domain lead, which yields the identical
         # slug to before.
-        prospect_id = make_slug(domain, page_url, variant)
+        # `offer` keeps a lead's Smart Site, Get Listed and Sponsored Story in
+        # three separate folders. Empty for every site offer, which leaves the
+        # slug byte-identical to what is already published.
+        prospect_id = make_slug(domain, page_url, variant, OFFER_PAGE_OFFERS.get(offer, ""))
 
         yield sse("log", text="Generating Smart Site with Claude...", level="info")
         if notes:

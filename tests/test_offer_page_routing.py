@@ -76,3 +76,52 @@ def test_vertical_is_forwarded_as_none_when_blank(tmp_path):
         generator.build_offer_page_site("sponsored_story", _intel(), "acme-com",
                                         vertical=None)
     assert gen.call_args.kwargs["vertical"] is None
+
+
+# ── slug isolation ──────────────────────────────────────────────────────────
+# Both magnets and the Smart Site landed in ONE folder per domain, so each build
+# replaced the last and a Get Listed link and a Sponsored Story link resolved to
+# whichever ran second. Same overwrite class slug.py already guards for domains.
+
+from slug import make_slug
+
+
+def test_each_offer_gets_its_own_folder():
+    d = "mayamooncollective.com"
+    slugs = {
+        make_slug(d),
+        make_slug(d, offer="get_listed"),
+        make_slug(d, offer="sponsored_story"),
+    }
+    assert len(slugs) == 3, f"offers collided: {slugs}"
+
+
+def test_smart_site_slug_is_byte_identical_to_before():
+    """Every preview already sitting in a prospect's inbox 404s if this moves."""
+    d = "mayamooncollective.com"
+    assert make_slug(d) == "mayamooncollective-com"
+    assert make_slug(d, offer="") == "mayamooncollective-com"
+    # "Smart Site" is deliberately absent from the suffix map.
+    assert make_slug(d, offer="Smart Site") == "mayamooncollective-com"
+
+
+def test_unknown_offer_falls_back_to_the_domain_slug():
+    """An offer nobody mapped must not invent a folder no link points at."""
+    assert make_slug("acme.com", offer="whatever") == "acme-com"
+
+
+def test_offer_suffix_composes_with_a_chain_variant():
+    """A chain branch that also gets a magnet needs BOTH discriminators."""
+    a = make_slug("betterbuzzcoffee.com", variant="Hillcrest", offer="get_listed")
+    b = make_slug("betterbuzzcoffee.com", variant="North Park", offer="get_listed")
+    c = make_slug("betterbuzzcoffee.com", variant="Hillcrest", offer="sponsored_story")
+    assert len({a, b, c}) == 3
+    assert a.endswith("---get-listed")
+
+
+def test_offer_slug_stays_within_the_serve_smart_site_ceiling():
+    """serve-smart-site 400s anything over 128 chars, which is a dead link in a
+    sent email rather than a failed build."""
+    long_domain = ("a" * 60) + ".com"
+    s = make_slug(long_domain, variant="Some Long Branch Name Here", offer="sponsored_story")
+    assert len(s) <= 128, len(s)
