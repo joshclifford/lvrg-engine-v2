@@ -415,7 +415,15 @@ def test_no_nav_or_multi_page_language_since_this_is_a_standalone_page(monkeypat
     generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
 
     prompt = _prompt_text(captured)
-    assert "no nav to other pages" in prompt.lower()
+    # The wording changed on 8 Sep 2026. "no nav to other pages" was a plausible
+    # reason every backlink got dropped: read literally it forbids linking out
+    # at all, and the live page shipped with zero links to the business. The
+    # standalone rule still has to be stated, so this pins the INTENT: no nav
+    # bar, no links to sibling pages of this mockup, outbound links unaffected.
+    lowered = prompt.lower()
+    assert "single page" in lowered
+    assert "no nav bar" in lowered
+    assert "other pages of this mockup" in lowered
 
 
 # ── backlinks and layout (PM review, 8 Sep 2026) ─────────────────────────────
@@ -500,3 +508,91 @@ def test_pull_quote_is_still_never_attributed_to_a_customer(monkeypatch):
     prompt = _prompt_text(captured)
     assert "NEVER ATTRIBUTE A QUOTE TO A CUSTOMER" in prompt
     assert "THEIR OWN words about themselves" in prompt
+
+
+# ── the backlink guard ──────────────────────────────────────────────────────
+# The first prompt that asked for backlinks was ignored outright: the live
+# Sponsored Story shipped with six links, every one of them ours, and none to
+# the business being sold. Asking is not knowing.
+
+def test_own_domain_links_are_counted_from_hrefs_not_body_text():
+    """The business name and domain appear in the copy on every one of these
+    pages. A substring search would report a page rich in backlinks when it has
+    none, which is precisely the failure this guard exists to catch."""
+    html = (
+        '<a href="https://mayamooncollective.com">Maya Moon</a>'
+        '<a href="https://www.mayamooncollective.com/menu">the menu</a>'
+        '<p>Visit mayamooncollective.com for hours</p>'
+    )
+    assert generator._count_own_domain_links(html, "mayamooncollective.com") == 2
+
+
+def test_booking_and_social_links_do_not_count_as_backlinks():
+    """Both were present on the failing page. Counting either would let a page
+    satisfy the requirement while never linking to the business itself."""
+    html = (
+        '<a href="https://theresandiego.com/letschat">Claim This Feature</a>'
+        '<a href="https://www.instagram.com/mayamooncollective">Instagram</a>'
+    )
+    assert generator._count_own_domain_links(html, "mayamooncollective.com") == 0
+
+
+def test_www_and_paths_still_count_as_the_same_site():
+    html = (
+        '<a href="https://www.acme.com/">home</a>'
+        '<a href="http://acme.com/menu?x=1">menu</a>'
+    )
+    assert generator._count_own_domain_links(html, "acme.com") == 2
+
+
+def test_a_missing_domain_counts_nothing_rather_than_crashing():
+    assert generator._count_own_domain_links('<a href="https://x.com">x</a>', "") == 0
+
+
+@pytest.mark.parametrize(
+    "offer,minimum", [("sponsored_story", 3), ("get_listed", 2)]
+)
+def test_prompt_states_the_minimum_and_names_the_real_domain(monkeypatch, offer, minimum):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    intel = _intel()
+    intel["domain"] = "mayamooncollective.com"
+    generator.generate_offer_lead_magnet_page(offer, intel)
+
+    prompt = _prompt_text(captured)
+    assert f"MINIMUM {minimum} links" in prompt
+    assert "https://mayamooncollective.com" in prompt
+    # The booking link must be described as OURS, so it cannot stand in.
+    assert "This is OUR link, not theirs" in prompt
+
+
+def test_single_page_rule_no_longer_reads_as_a_ban_on_outbound_links(monkeypatch):
+    """"no nav to other pages" was plausibly why every backlink was dropped: a
+    reasonable reading of it is "do not link out"."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+
+    prompt = _prompt_text(captured)
+    assert "This does NOT mean avoid links" in prompt
+
+
+def test_too_few_backlinks_warns_but_still_returns_the_page(monkeypatch, capsys):
+    """A thin page is still a usable mockup. Failing the build would cost the
+    user a generation over something a rebuild may well fix."""
+    bare = '<!DOCTYPE html><html><body><p>No links at all.</p></body></html>'
+    captured = []
+    monkeypatch.setattr(
+        generator, "_get_client", lambda **k: _mock_client(captured, html=bare)
+    )
+
+    intel = _intel()
+    intel["domain"] = "mayamooncollective.com"
+    html = generator.generate_offer_lead_magnet_page("sponsored_story", intel)
+
+    assert "No links at all." in html
+    warning = capsys.readouterr().out
+    assert "carries 0 link(s)" in warning
+    assert "expected at least 3" in warning

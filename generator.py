@@ -19,6 +19,9 @@ import anthropic
 import cost
 from claude_text import first_text
 from config import SITES_DIR, BOOKING_URL, SENDER_NAME, SENDER_AGENCY
+# One definition of "the same host", shared with the slug builder. Comparing
+# raw href strings would miss www. and a trailing slash.
+from slug import canonical_domain
 
 # Ceiling for a generated page. This is a cap, not a target — most pages come in
 # well under it, so raising it costs nothing on a typical build and only helps
@@ -1075,6 +1078,10 @@ STRUCTURE (this is an editorial feature mock-up, not a full website):
     else:
         raise ValueError(f"Unknown offer for generate_offer_lead_magnet_page: {offer!r}")
 
+    # The Sponsored Story is sold on its backlinks, so it carries one more than
+    # the profile does.
+    min_own_links = 3 if offer == "sponsored_story" else 2
+
     page_prompt = f"""You are building a personalized lead-magnet PREVIEW PAGE for {intel['business_name']}.
 This is NOT a full business website. See the specific structure below for what it actually is.
 
@@ -1109,6 +1116,25 @@ Use Tailwind CSS via CDN. Include this in <head>:
 Use Google Fonts matching the brand vibe above.
 NO inline style= attributes. Use Tailwind classes exclusively.
 
+━━━ REQUIRED LINKS ━━━
+Two different destinations. Do not confuse them, and do not let one stand in for the other.
+
+1. THE BUSINESS'S OWN WEBSITE: https://{intel['domain']}
+   This is the one that was missing, and it is the one being sold. A Sponsored Story is bought
+   for "links back to your website"; a Get Listed profile is bought for "links to your website,
+   menu, reservations and social profiles". A page that names the business and never links to it
+   has failed to demonstrate the product.
+   MINIMUM {min_own_links} links to this URL, in the positions named below.
+   Use it verbatim. Never example.com, never "#", never a link to ThereSanDiego instead.
+   Style them as ordinary editorial links. Never rel="nofollow": the link counting is the point.
+
+2. THE BOOKING PAGE: {BOOKING_URL}
+   For the claim bar, the CTA buttons and the plan cards ONLY. This is OUR link, not theirs.
+   It must never replace a link to their own website, and adding more of these does not satisfy
+   the requirement above.
+
+Socials, if supplied, go in the footer. They are additional, not a substitute for the website link.
+
 ━━━ WHAT TO BUILD ━━━
 {page_purpose}
 
@@ -1116,7 +1142,9 @@ NO inline style= attributes. Use Tailwind classes exclusively.
 - Reference {intel.get('neighborhood') or intel.get('location','').split(',')[0]} naturally
 - NEVER write fake testimonials. If no real reviews, skip quotes entirely
 - NEVER invent pricing beyond what's given above
-- Single page, no nav to other pages. This is a standalone lead magnet, not a multi-page site
+- Single page: no nav bar and no links to OTHER PAGES OF THIS MOCKUP, because there are none.
+  This does NOT mean avoid links. Outbound links to the business's own website are REQUIRED,
+  see the REQUIRED LINKS block above
 - NO EM-DASHES anywhere in the copy. Do not use the character "—" or "–". Use a full stop,
   a comma, or a colon instead. This applies to headings, body copy, captions and buttons.
 - Avoid the AI tells: "elevate", "unlock", "seamless", "in today's world", "nestled",
@@ -1155,8 +1183,47 @@ Start with <!DOCTYPE html>"""
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
     html = _strip_em_dashes(html)
+
+    # Count the backlinks BEFORE photo inlining, so a base64 blob containing the
+    # domain by coincidence cannot inflate the number.
+    #
+    # The prompt asks for these and the first version that asked was ignored
+    # completely: the page carried six links, every one of them ours, and none
+    # to the business being sold. Asking is not the same as knowing, so this
+    # reports what actually shipped. A warning rather than a raise: a page with
+    # too few links is still a usable mockup, and failing the build would cost
+    # the user a generation over something a rebuild may fix.
+    own_links = _count_own_domain_links(html, intel.get("domain", ""))
+    if own_links < min_own_links:
+        print(
+            f"  [generator] WARNING: {offer} page for {intel['business_name']} carries "
+            f"{own_links} link(s) to {intel.get('domain')!r}, expected at least "
+            f"{min_own_links}. The backlink IS the product on this offer."
+        )
+
     html = _inline_photo_assets(html, photo_assets)
     return html
+
+
+def _count_own_domain_links(html: str, domain: str) -> int:
+    """How many hrefs point at the prospect's OWN site.
+
+    Only href targets count. The business name appears in body copy on every one
+    of these pages, and a substring search over the whole document would report
+    a page rich in backlinks when it has none, which is the exact failure this
+    is here to catch.
+
+    Socials are excluded deliberately: an Instagram profile is not the website
+    the offer is sold on, and counting it let a page satisfy the requirement
+    while still never linking to the business itself.
+    """
+    if not domain:
+        return 0
+    host = canonical_domain(domain)
+    if not host:
+        return 0
+    hrefs = re.findall(r'<a\b[^>]*\bhref\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE)
+    return sum(1 for h in hrefs if canonical_domain(h) == host)
 
 
 def build_offer_page_site(
