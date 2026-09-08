@@ -1118,6 +1118,49 @@ Start with <!DOCTYPE html>"""
     return html
 
 
+def build_offer_page_site(
+    offer: str,
+    intel: dict,
+    prospect_id: str,
+    vertical: Optional[str] = None,
+    meter=None,
+    photo_assets: Optional[dict] = None,
+) -> str:
+    """Generate ONE offer mockup, inject the chat widget, write it to disk, and
+    return the folder path.
+
+    Exists so api.py can treat an offer page exactly like generate_site's
+    return value and hand it straight to deploy_site. generate_offer_lead_magnet_page
+    deliberately returns a bare HTML string (its prompt says the widget is
+    "injected separately"), which is the right shape for a caller that wants
+    the markup and the wrong shape for the deploy path.
+
+    The widget injection is the same two lines generate_site uses. Keep them in
+    step: a preview that renders without the chat widget is a preview the
+    prospect cannot reply from.
+    """
+    print(f"  [generator] Generating {offer} mockup for {intel['business_name']}...")
+
+    html = generate_offer_lead_magnet_page(
+        offer, intel, vertical=vertical, meter=meter, photo_assets=photo_assets
+    )
+
+    widget_html = _build_chat_widget(intel)
+    if "</body>" in html:
+        html = html.replace("</body>", widget_html + "\n</body>")
+    else:
+        html += widget_html
+
+    site_dir = os.path.join(SITES_DIR, prospect_id)
+    os.makedirs(site_dir, exist_ok=True)
+    index_path = os.path.join(site_dir, "index.html")
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    print(f"  [generator] ✓ {offer} mockup saved to {site_dir}")
+    return site_dir
+
+
 def generate_multi_page_site(
     intel: dict,
     prospect_id: str,

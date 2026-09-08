@@ -20,7 +20,7 @@ from pydantic import BaseModel
 import cost
 from claude_text import first_text
 from intel import scrape_site, grade_site
-from generator import generate_site, generate_multi_page_site, generate_email
+from generator import generate_site, generate_multi_page_site, generate_email, build_offer_page_site
 from pages import plan_pages
 from deploy import deploy_site
 from slug import canonical_domain, make_slug
@@ -200,6 +200,11 @@ class BuildRequest(BaseModel):
     # every existing caller (leadscraper's current payload, run_engine.py,
     # smoke tests) omits this and is completely unaffected.
     multi_page: bool = False
+    # Get Listed framing hint ("restaurant", "cafe", "retail", "realtor",
+    # "contractor"). Only read when `offer` is a lead-magnet offer; anything
+    # unrecognised degrades to the generator's generic framing rather than
+    # failing the build, so an unknown business_type is never fatal.
+    vertical: str = ""
 
 
 class ChatRequest(BaseModel):
@@ -256,7 +261,17 @@ def _merge_known(intel: dict, known: dict) -> list:
     return used
 
 
-async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "", page_url: str = "", multi_page: bool = False, variant: str = "") -> AsyncGenerator[str, None]:
+# The `offer` strings that mean "build ONE lead-magnet mockup" instead of a
+# site, mapped to the key generate_offer_lead_magnet_page expects. Anything not
+# in here takes the existing generate_site / generate_multi_page_site path, so
+# every caller that predates this map is byte-for-byte unaffected.
+OFFER_PAGE_OFFERS = {
+    "Get Listed": "get_listed",
+    "Sponsored Story": "sponsored_story",
+}
+
+
+async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "", page_url: str = "", multi_page: bool = False, variant: str = "", vertical: str = "") -> AsyncGenerator[str, None]:
     """Run the full engine pipeline, yielding SSE events."""
 
     loop = asyncio.get_event_loop()
@@ -400,7 +415,17 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         propagates and ends the build — same as before this change.
         """
         nonlocal callback_sent, deploy_error
-        if multi_page:
+        offer_key = OFFER_PAGE_OFFERS.get(offer)
+        if offer_key:
+            # Get Listed / Sponsored Story: ONE mockup page, never multi-page.
+            # `multi_page` is ignored rather than honoured — these offers are a
+            # single directory profile or a single article by definition, and a
+            # caller sending both is describing something that does not exist.
+            paths = None
+            site_dir_local = build_offer_page_site(offer_key, intel, prospect_id,
+                                                   vertical=vertical or None,
+                                                   meter=meter, photo_assets=photo_assets)
+        elif multi_page:
             paths = generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6,
                                              meter=meter, photo_assets=photo_assets)
             site_dir_local = os.path.dirname(next(iter(paths.values())))
@@ -696,10 +721,15 @@ async def build(req: BuildRequest):
     # because it lands in the slug, which serve-smart-site rejects over 128 chars.
     variant = (req.variant or "").strip()[:MAX_VARIANT_CHARS]
 
+    # Framing hint only. Never validated against a list here: the generator
+    # falls back to generic framing for anything it does not recognise, so a
+    # new business_type upstream must not start failing builds.
+    vertical = (req.vertical or "").strip()[:64]
+
     return StreamingResponse(
         run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes, req.known, req.r6,
                      req.lead_id, req.callback_url, req.callback_secret, page_url, req.multi_page,
-                     variant),
+                     variant, vertical),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

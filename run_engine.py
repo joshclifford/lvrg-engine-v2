@@ -14,6 +14,7 @@ Options:
   --icp TYPE          ICP type hint for Claude (e.g. "restaurant", "catering")
   --city CITY         City context (default: San Diego, CA)
   --offer OFFER       Offer type: Website Rebuild | Website Grade | Smart Site | AI Chat
+                      | Get Listed | Sponsored Story  (the last two build ONE mockup page)
   --cta CTA           CTA: Book a Call | Claim Your Site | Get Your Grade | Watch Demo
 """
 
@@ -168,7 +169,7 @@ def main():
     parser.add_argument("--no-deploy", action="store_true", help="Skip GitHub Pages deploy")
     parser.add_argument("--icp", help="ICP type hint (restaurant, catering, bar, etc.)")
     parser.add_argument("--city", default="San Diego, CA", help="City context")
-    parser.add_argument("--offer", default="Website Rebuild", choices=["Website Rebuild", "Website Grade", "Smart Site", "AI Chat"], help="Offer type for this run")
+    parser.add_argument("--offer", default="Website Rebuild", choices=["Website Rebuild", "Website Grade", "Smart Site", "AI Chat", "Get Listed", "Sponsored Story"], help="Offer type for this run")
     parser.add_argument("--cta", default="Book a Call", choices=["Book a Call", "Claim Your Site", "Get Your Grade", "Watch Demo"], help="CTA for this run")
     args = parser.parse_args()
     
