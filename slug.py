@@ -43,8 +43,8 @@ def canonical_domain(domain: str) -> str:
     return d.rstrip(".")
 
 
-def make_slug(domain: str, page_url: str = "", variant: str = "") -> str:
-    """Domain (+ optional sub-page, + optional variant) -> preview slug.
+def make_slug(domain: str, page_url: str = "", variant: str = "", offer: str = "") -> str:
+    """Domain (+ optional sub-page, + optional variant, + optional offer) -> preview slug.
 
     Slugs the FULL domain, so foo.com and foo.net no longer collide on `foo`
     and silently overwrite each other's live preview. Matches the format the
@@ -66,7 +66,12 @@ def make_slug(domain: str, page_url: str = "", variant: str = "") -> str:
     The caller passes something that differs per branch (the business name, which
     Google already qualifies by location).
 
-    Both suffixes are OPTIONAL and omitting them returns the domain-only slug
+    `offer` distinguishes two PRODUCTS built for one business. A lead can hold a
+    Smart Site and both lead-magnet mockups at once; without this they share a
+    folder and each build replaces the last. Smart Site maps to no suffix on
+    purpose, so its slug never moves.
+
+    All three suffixes are OPTIONAL and omitting them returns the domain-only slug
     BYTE-IDENTICALLY, so no existing preview is orphaned and root-domain leads
     behave exactly as they do today. That property is what lets the caller give
     the suffix only to the branch that has no live page yet, leaving the one
@@ -147,6 +152,27 @@ def make_slug(domain: str, page_url: str = "", variant: str = "") -> str:
     if variant_slug:
         s = f"{s}{BOUNDARY}{variant_slug}"
 
+    # ── Offer suffix ─────────────────────────────────────────────────────────
+    #
+    # The fourth way one slug served two different pages, and the first that is
+    # not about two BUSINESSES colliding. One business can hold a Smart Site, a
+    # Get Listed mockup and a Sponsored Story mockup at once: same domain, same
+    # path, same variant, three different products. Without this they all slug
+    # to `mayamooncollective-com`, share one folder, and each build silently
+    # replaces the last — which is how a Get Listed link and a Sponsored Story
+    # link both resolved to whichever built second.
+    #
+    # A fixed vocabulary, so no digest is needed and no budget can be blown: the
+    # caller passes an offer key, never free text. Unknown values are ignored
+    # rather than slugified, which keeps an unexpected offer on the domain-only
+    # slug (today's behaviour) instead of inventing a folder nobody can find.
+    #
+    # Smart Site deliberately maps to nothing. Its slug must stay BYTE-IDENTICAL
+    # or every preview already sitting in a prospect's inbox 404s.
+    offer_suffix = OFFER_SLUG_SUFFIX.get(offer or "")
+    if offer_suffix:
+        s = f"{s}{BOUNDARY}{offer_suffix}"
+
     return s
 
 
@@ -154,6 +180,17 @@ def make_slug(domain: str, page_url: str = "", variant: str = "") -> str:
 # the tail of a URL path is rarely what distinguishes two sibling businesses.
 # Truncation is safe for the folder name but NOT for uniqueness on its own —
 # see the note in _path_slug.
+# Offer keys that get their own folder, and the suffix each one takes. Only
+# lead-magnet offers appear here: "Smart Site" is absent so its slug stays
+# byte-identical to every preview already published.
+#
+# Short and fixed rather than slugified free text, so the suffix can never eat
+# the 128-char budget the path and variant fragments have to negotiate for.
+OFFER_SLUG_SUFFIX = {
+    "get_listed": "get-listed",
+    "sponsored_story": "sponsored-story",
+}
+
 MAX_PATH_SLUG_CHARS = 40
 
 # The separator between the domain half and the path half. Three hyphens because

@@ -384,15 +384,22 @@ def test_prose_dashes_become_commas_without_doubling_punctuation():
 
 @pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
 def test_neither_offer_asks_for_testimonial_quotes(monkeypatch, offer):
-    """intel["reviews"] is never populated, so a quote section could only be
-    filled by inventing one. Rating stats are fine; quotes are not."""
+    """intel["reviews"] is never populated, so a CUSTOMER quote could only be
+    filled by inventing one.
+
+    The Sponsored Story does now ask for a pull quote (PM review, 8 Sep 2026).
+    That is deliberate and safe: it is the business's own copy set large, which
+    is ordinary editorial. What stays banned is attribution to a person, which
+    is what turns a design flourish into fabricated evidence. This test pins the
+    attribution rule rather than the words "pull quote"."""
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
     generator.generate_offer_lead_magnet_page(offer, _intel())
 
     prompt = _prompt_text(captured)
-    assert "PULL QUOTE" not in prompt
+    assert "NEVER ATTRIBUTE A QUOTE TO A CUSTOMER" in prompt
+    assert "never invent a testimonial" in prompt
     assert "TESTIMONIALS" not in prompt
 
 
@@ -408,4 +415,256 @@ def test_no_nav_or_multi_page_language_since_this_is_a_standalone_page(monkeypat
     generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
 
     prompt = _prompt_text(captured)
-    assert "no nav to other pages" in prompt.lower()
+    # The wording changed on 8 Sep 2026. "no nav to other pages" was a plausible
+    # reason every backlink got dropped: read literally it forbids linking out
+    # at all, and the live page shipped with zero links to the business. The
+    # standalone rule still has to be stated, so this pins the INTENT: no nav
+    # bar, no links to sibling pages of this mockup, outbound links unaffected.
+    lowered = prompt.lower()
+    assert "single page" in lowered
+    assert "no nav bar" in lowered
+    assert "other pages of this mockup" in lowered
+
+
+# ── backlinks and layout (PM review, 8 Sep 2026) ─────────────────────────────
+# The Sponsored Story shipped with no link to the prospect's own site at all,
+# on an offer sold as "published on ThereSanDiego.com with links back to your
+# website". The backlink IS the product; the page was demonstrating everything
+# except the part being bought.
+
+@pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
+def test_both_offers_are_told_to_link_to_the_prospects_real_domain(monkeypatch, offer):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    intel = _intel()
+    intel["domain"] = "mayamooncollective.com"
+    generator.generate_offer_lead_magnet_page(offer, intel)
+
+    prompt = _prompt_text(captured)
+    assert "https://mayamooncollective.com" in prompt
+    # The rule has to say the links matter, not just that they exist.
+    assert "never example.com" in prompt
+    assert 'never add rel="nofollow"' in prompt.lower()
+
+
+def test_sponsored_story_asks_for_three_backlinks_in_named_positions(monkeypatch):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+
+    prompt = _prompt_text(captured)
+    assert "at least THREE" in prompt
+    assert "FIRST paragraph" in prompt
+
+
+def test_sponsored_story_is_longer_than_the_five_paragraphs_the_pm_saw(monkeypatch):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+
+    prompt = _prompt_text(captured)
+    assert "7-9 paragraphs" in prompt
+    # Length alone is padding; the structure is what makes it readable.
+    assert "SUBHEADINGS" in prompt
+    assert "PULL QUOTE" in prompt
+
+
+@pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
+def test_photos_are_spread_through_the_page_not_stacked_on_top(monkeypatch, offer):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page(offer, _intel())
+
+    prompt = _prompt_text(captured)
+    assert "BETWEEN sections or paragraphs" in prompt
+
+
+@pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
+def test_no_stock_photo_fallback_when_the_lead_has_none(monkeypatch, offer):
+    """A mockup carries the prospect's own branding. An obvious placeholder
+    reads worse than no image at all."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page(offer, _intel())
+
+    prompt = _prompt_text(captured)
+    assert "do NOT substitute stock photography" in prompt
+
+
+def test_pull_quote_is_still_never_attributed_to_a_customer(monkeypatch):
+    """The Sponsored Story now asks for a pull quote, which is the exact shape
+    the invented-testimonial guard exists to stop. It must be drawn from their
+    own copy, not put in a customer's mouth."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+
+    prompt = _prompt_text(captured)
+    assert "NEVER ATTRIBUTE A QUOTE TO A CUSTOMER" in prompt
+    assert "THEIR OWN words about themselves" in prompt
+
+
+# ── the backlink guard ──────────────────────────────────────────────────────
+# The first prompt that asked for backlinks was ignored outright: the live
+# Sponsored Story shipped with six links, every one of them ours, and none to
+# the business being sold. Asking is not knowing.
+
+def test_own_domain_links_are_counted_from_hrefs_not_body_text():
+    """The business name and domain appear in the copy on every one of these
+    pages. A substring search would report a page rich in backlinks when it has
+    none, which is precisely the failure this guard exists to catch."""
+    html = (
+        '<a href="https://mayamooncollective.com">Maya Moon</a>'
+        '<a href="https://www.mayamooncollective.com/menu">the menu</a>'
+        '<p>Visit mayamooncollective.com for hours</p>'
+    )
+    assert generator._count_own_domain_links(html, "mayamooncollective.com") == 2
+
+
+def test_booking_and_social_links_do_not_count_as_backlinks():
+    """Both were present on the failing page. Counting either would let a page
+    satisfy the requirement while never linking to the business itself."""
+    html = (
+        '<a href="https://theresandiego.com/letschat">Claim This Feature</a>'
+        '<a href="https://www.instagram.com/mayamooncollective">Instagram</a>'
+    )
+    assert generator._count_own_domain_links(html, "mayamooncollective.com") == 0
+
+
+def test_www_and_paths_still_count_as_the_same_site():
+    html = (
+        '<a href="https://www.acme.com/">home</a>'
+        '<a href="http://acme.com/menu?x=1">menu</a>'
+    )
+    assert generator._count_own_domain_links(html, "acme.com") == 2
+
+
+def test_a_missing_domain_counts_nothing_rather_than_crashing():
+    assert generator._count_own_domain_links('<a href="https://x.com">x</a>', "") == 0
+
+
+@pytest.mark.parametrize(
+    "offer,minimum", [("sponsored_story", 3), ("get_listed", 2)]
+)
+def test_prompt_states_the_minimum_and_names_the_real_domain(monkeypatch, offer, minimum):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    intel = _intel()
+    intel["domain"] = "mayamooncollective.com"
+    generator.generate_offer_lead_magnet_page(offer, intel)
+
+    prompt = _prompt_text(captured)
+    assert f"MINIMUM {minimum} links" in prompt
+    assert "https://mayamooncollective.com" in prompt
+    # The booking link must be described as OURS, so it cannot stand in.
+    assert "This is OUR link, not theirs" in prompt
+
+
+def test_single_page_rule_no_longer_reads_as_a_ban_on_outbound_links(monkeypatch):
+    """"no nav to other pages" was plausibly why every backlink was dropped: a
+    reasonable reading of it is "do not link out"."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+
+    prompt = _prompt_text(captured)
+    assert "This does NOT mean avoid links" in prompt
+
+
+def test_too_few_backlinks_warns_but_still_returns_the_page(monkeypatch, capsys):
+    """A thin page is still a usable mockup. Failing the build would cost the
+    user a generation over something a rebuild may well fix."""
+    bare = '<!DOCTYPE html><html><body><p>No links at all.</p></body></html>'
+    captured = []
+    monkeypatch.setattr(
+        generator, "_get_client", lambda **k: _mock_client(captured, html=bare)
+    )
+
+    intel = _intel()
+    intel["domain"] = "mayamooncollective.com"
+    html = generator.generate_offer_lead_magnet_page("sponsored_story", intel)
+
+    assert "No links at all." in html
+    warning = capsys.readouterr().out
+    assert "carries 0 link(s)" in warning
+    assert "expected at least 3" in warning
+
+
+# ── link to THEIR page, not the root ────────────────────────────────────────
+# Su Pan Bakery is stored as https://supanbakery.com/en/ and the backlink went
+# to the bare root. Harmless there, but it is POD01-34 in link form: when a
+# business lives inside a larger site the root belongs to the PARENT, and the
+# "visit their website" link sends the prospect to the wrong company.
+
+def test_backlink_uses_the_leads_own_page_when_it_has_a_path(monkeypatch):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    intel = _intel()
+    intel["domain"] = "supanbakery.com"
+    intel["page_url"] = "https://supanbakery.com/en/"
+    generator.generate_offer_lead_magnet_page("get_listed", intel)
+
+    prompt = _prompt_text(captured)
+    assert "https://supanbakery.com/en/" in prompt
+    assert "Use it VERBATIM, including any path" in prompt
+
+
+def test_root_domain_leads_still_link_to_the_domain(monkeypatch):
+    """No path means no change: the overwhelming majority of leads."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    intel = _intel()
+    intel["domain"] = "acme.com"
+    generator.generate_offer_lead_magnet_page("sponsored_story", intel)
+
+    prompt = _prompt_text(captured)
+    assert "https://acme.com" in prompt
+
+
+def test_a_path_link_still_counts_toward_the_backlink_minimum():
+    """The counter compares hosts, so a link carrying the lead's path must not
+    be missed just because it is not the bare root."""
+    html = (
+        '<a href="https://supanbakery.com/en/">Su Pan Bakery</a>'
+        '<a href="https://supanbakery.com/en/menu">the pan dulce</a>'
+    )
+    assert generator._count_own_domain_links(html, "supanbakery.com") == 2
+
+
+@pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
+def test_prompt_forbids_reusing_a_photo(monkeypatch, offer):
+    """Four images in seven places produced a 5 MB page the proxy refused."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page(offer, _intel())
+
+    prompt = _prompt_text(captured)
+    assert "USE EACH PHOTO AT MOST ONCE" in prompt
+    assert "use fewer images" in prompt
+
+
+def test_an_oversized_page_warns_instead_of_failing_silently(monkeypatch, capsys):
+    """A page over the proxy cap builds fine, stores `ready`, and serves blank.
+    Nothing else in the chain notices, so the generator has to say it."""
+    monkeypatch.setattr(generator, "_PREVIEW_PROXY_WARN_BYTES", 1000)
+    big = "<!DOCTYPE html><html><body>" + ("<p>filler</p>" * 400) + "</body></html>"
+    captured = []
+    monkeypatch.setattr(
+        generator, "_get_client", lambda **k: _mock_client(captured, html=big)
+    )
+
+    generator.generate_offer_lead_magnet_page("get_listed", _intel())
+
+    out = capsys.readouterr().out
+    assert "preview proxy rejects anything over 5 MB" in out

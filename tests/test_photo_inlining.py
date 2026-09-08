@@ -378,3 +378,102 @@ def test_the_saved_intel_file_excludes_the_blobs():
     dump = src[src.find("json.dump"):src.find("json.dump") + 200]
     assert 'k != "photo_assets"' in dump, \
         "the on-disk intel record would carry hundreds of KB of base64"
+
+
+# ── rendered-byte budget (8 Sep 2026) ────────────────────────────────────────
+# intel's _MAX_PHOTO_TOTAL_BYTES bounds the bytes DOWNLOADED. It says nothing
+# about the bytes WRITTEN, and `replace(url, data_uri)` swapped every
+# occurrence, so a photo used twice was embedded twice.
+#
+# Pop Pie Co's Get Listed page: 4 unique images in 7 places, 3 of them paid for
+# twice, 5.04 MB against the preview proxy's 5 MB cap. The build succeeded, the
+# row said `ready`, and the prospect got a blank "Preview unavailable". The
+# markup itself was 9.6 KB.
+
+def _blob(kb: int, tag: str = "X") -> str:
+    """`tag` keeps two blobs distinguishable. Without it every _blob(500) is the
+    same string, and "this one was not inlined" silently compares a value to
+    itself."""
+    return "data:image/jpeg;base64," + (tag * (kb * 1024))
+
+
+def test_a_photo_used_twice_is_not_embedded_twice(monkeypatch):
+    monkeypatch.setattr(generator, "_MAX_INLINE_RENDER_BYTES", 1_200_000)
+    assets = {"http://x.com/a.jpg": _blob(800)}
+    html = '<img src="http://x.com/a.jpg"><img src="http://x.com/a.jpg">'
+
+    out = generator._inline_photo_assets(html, assets)
+
+    assert out.count("data:image/jpeg;base64,") == 1
+    # The repeat keeps the original URL and hotlinks, the same fallback a photo
+    # we could not download already takes.
+    assert out.count("http://x.com/a.jpg") == 1
+
+
+def test_every_image_gets_inlined_before_any_gets_a_second(monkeypatch):
+    """Coverage first. Spending the budget on one image's duplicate would leave
+    another image missing entirely, which is far more visible."""
+    monkeypatch.setattr(generator, "_MAX_INLINE_RENDER_BYTES", 1_700_000)
+    assets = {
+        "http://x.com/a.jpg": _blob(800, "A"),
+        "http://x.com/b.jpg": _blob(800, "B"),
+    }
+    # `a` appears first and twice; a naive pass would spend the budget on it.
+    html = (
+        '<img src="http://x.com/a.jpg">'
+        '<img src="http://x.com/a.jpg">'
+        '<img src="http://x.com/b.jpg">'
+    )
+
+    out = generator._inline_photo_assets(html, assets)
+
+    assert assets["http://x.com/a.jpg"] in out
+    assert assets["http://x.com/b.jpg"] in out
+
+
+def test_the_pop_pie_page_now_fits_under_the_proxy_cap(monkeypatch):
+    """The real shape that failed: 4 unique images, 3 of them repeated."""
+    assets = {f"http://x.com/p{i}.jpg": _blob(780, chr(65 + i)) for i in range(4)}
+    html = "".join(f'<img src="http://x.com/p{i}.jpg">' for i in range(4)) + \
+           "".join(f'<img src="http://x.com/p{i}.jpg">' for i in range(3))
+
+    out = generator._inline_photo_assets(html, assets)
+
+    assert len(out.encode()) < 5 * 1024 * 1024
+    # All four still present, so nothing was dropped to achieve that.
+    for uri in assets.values():
+        assert uri in out
+
+
+def test_budget_is_never_exceeded_even_by_the_first_pass(monkeypatch):
+    """A budget smaller than the images must drop images, not overshoot."""
+    monkeypatch.setattr(generator, "_MAX_INLINE_RENDER_BYTES", 900_000)
+    assets = {
+        "http://x.com/a.jpg": _blob(800, "A"),
+        "http://x.com/b.jpg": _blob(800, "B"),
+    }
+    html = '<img src="http://x.com/a.jpg"><img src="http://x.com/b.jpg">'
+
+    out = generator._inline_photo_assets(html, assets)
+
+    assert out.count("data:image/jpeg;base64,") == 1
+    assert len(out.encode()) < 900_000 + 5000
+
+
+def test_no_assets_leaves_the_html_untouched():
+    html = '<img src="http://x.com/a.jpg">'
+    assert generator._inline_photo_assets(html, None) == html
+    assert generator._inline_photo_assets(html, {}) == html
+
+
+def test_a_photo_not_used_on_this_page_costs_nothing(monkeypatch):
+    """A sub-page using two of four photos carries two, not four."""
+    monkeypatch.setattr(generator, "_MAX_INLINE_RENDER_BYTES", 3_500_000)
+    assets = {
+        "http://x.com/a.jpg": _blob(500, "A"),
+        "http://x.com/unused.jpg": _blob(500, "U"),
+    }
+    out = generator._inline_photo_assets('<img src="http://x.com/a.jpg">', assets)
+
+    assert assets["http://x.com/a.jpg"] in out
+    assert assets["http://x.com/unused.jpg"] not in out

@@ -19,6 +19,9 @@ import anthropic
 import cost
 from claude_text import first_text
 from config import SITES_DIR, BOOKING_URL, SENDER_NAME, SENDER_AGENCY
+# One definition of "the same host", shared with the slug builder. Comparing
+# raw href strings would miss www. and a trailing slash.
+from slug import canonical_domain
 
 # Ceiling for a generated page. This is a cap, not a target — most pages come in
 # well under it, so raising it costs nothing on a typical build and only helps
@@ -598,6 +601,25 @@ Start with <!DOCTYPE html>"""
     return site_dir
 
 
+# Ceiling on the base64 actually WRITTEN INTO one page, which is not the same
+# as the bytes downloaded. intel's _MAX_PHOTO_TOTAL_BYTES bounds the unique
+# images (2.4 MB raw, ~3.2 MB encoded); this bounds what the page renders, and
+# the two diverge the moment a page uses one photo twice.
+#
+# That is not hypothetical. Pop Pie Co's Get Listed page carried 4 unique images
+# in 7 places, paid for 3 of them twice, and came to 5.04 MB against the preview
+# proxy's 5 MB cap — 38 KB over, served as a blank "Preview unavailable" with a
+# successful build and a `ready` row behind it. The actual markup was 9.6 KB.
+#
+# 3.5 MB leaves ~1.5 MB of headroom under that cap for the HTML itself.
+_MAX_INLINE_RENDER_BYTES = int(os.environ.get("MAX_INLINE_RENDER_BYTES", "3500000"))
+
+# Warn at 4.5 MB, short of the proxy's 5 MB. The budget above should keep every
+# page well under this; if one still trips it, the markup itself has grown and
+# that is worth knowing BEFORE a prospect opens a blank page.
+_PREVIEW_PROXY_WARN_BYTES = int(os.environ.get("PREVIEW_PROXY_WARN_BYTES", "4500000"))
+
+
 def _inline_photo_assets(html: str, assets: Optional[dict]) -> str:
     """Swap the prospect's photo URLs for the bytes intel downloaded (POD01-124).
 
@@ -622,12 +644,38 @@ def _inline_photo_assets(html: str, assets: Optional[dict]) -> str:
     two of the four photos carries two, not four. Plain string replace is safe:
     measured across every live preview, an image src is never HTML-escaped
     (0 of 24 query-string srcs escape their &).
+
+    Bounded by _MAX_INLINE_RENDER_BYTES, and in two passes rather than one:
+    every image gets its FIRST occurrence inlined before any image gets a
+    second. A plain `replace(url, data_uri)` swaps every occurrence, so one
+    photo used twice was written into the page twice, and a page could blow the
+    proxy's 5 MB cap while the byte budget upstream looked fine. Coverage first
+    means a tight budget costs a repeat, never a whole image.
+
+    Occurrences past the budget keep their original URL and hotlink the
+    prospect's server, which is the same fallback a photo we could not download
+    already takes.
     """
     if not assets:
         return html
+
+    spent = 0
+
+    # Pass 1: one occurrence each, so no image is dropped for a duplicate.
     for url, data_uri in assets.items():
-        if url in html:
-            html = html.replace(url, data_uri)
+        if url not in html:
+            continue
+        if spent + len(data_uri) > _MAX_INLINE_RENDER_BYTES:
+            continue
+        html = html.replace(url, data_uri, 1)
+        spent += len(data_uri)
+
+    # Pass 2: whatever budget is left goes on the repeats.
+    for url, data_uri in assets.items():
+        while url in html and spent + len(data_uri) <= _MAX_INLINE_RENDER_BYTES:
+            html = html.replace(url, data_uri, 1)
+            spent += len(data_uri)
+
     return html
 
 
@@ -970,6 +1018,12 @@ def generate_offer_lead_magnet_page(
     press_block = _build_press_block(intel)
     social_block = _build_social_block(intel)
 
+    # Their real page, not the bare root. A business living inside a larger
+    # site shares a domain with its parent, so the root is somebody else's
+    # homepage (POD01-34). Falls back to the domain when there is no path,
+    # which is every ordinary root-domain lead.
+    own_site_url = intel.get("page_url") or f"https://{intel['domain']}"
+
     if offer == "get_listed":
         role, detail_hint = GET_LISTED_VERTICAL_FRAMING.get(
             vertical, ("a local business", "their services and what makes them worth choosing")
@@ -983,14 +1037,24 @@ STRUCTURE (this is a directory profile mock-up, not a full website):
    "This is a preview of your ThereSanDiego.com listing" plus gold pill "Claim This Listing →" linking to {BOOKING_URL}
 2. PROFILE HEADER: business name, {role} framing, location and neighborhood, primary photo.
    If a rating was supplied above, show it here as a star stat next to the name.
-3. ABOUT: 2-3 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice.
-   Work in what they want visitors to do, and speak to where they currently struggle,
-   without ever naming the struggle as a criticism of them.
-4. WHAT THEY OFFER: their real services as a short scannable list, grouped sensibly.
-   Use only the services given above. If none were listed, omit this section.
+3. ABOUT: 4-6 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice, broken into
+   two short paragraphs rather than one block. Work in what they want visitors to do, and speak to
+   where they currently struggle, without ever naming the struggle as a criticism of them.
+   Link the business name inline to {own_site_url} the first time it appears here.
+3b. FEATURE IMAGE: if photos were supplied, place one full-width between ABOUT and WHAT THEY OFFER,
+   with a short caption drawn from their real content. Never a stock image, never a placeholder.
+4. WHAT THEY OFFER: their real services as a short scannable list, grouped sensibly, two columns on
+   desktop. Use only the services given above. If none were listed, omit this section.
+   Follow it with a SECOND photo if two or more were supplied.
 5. AT A GLANCE: a compact fact panel built ONLY from real data given above.
-   Neighborhood, hours, phone, and rating, each shown only if present. Omit the panel entirely
-   if fewer than two of them exist. Never write "Not listed" on the page.
+   Neighborhood, hours, phone, rating, and a "Visit website" link to {own_site_url},
+   each shown only if present. Omit the panel entirely if fewer than two of them exist.
+   Never write "Not listed" on the page.
+5b. LINKS BACK TO THEIR SITE: "links to your website, menu, reservations and social profiles" is
+   one of the things the $297 profile is sold on, so the mockup has to demonstrate it. Carry at
+   least TWO links to {own_site_url}: the inline one in ABOUT and the fact-panel one.
+   Use their real domain exactly as given, never a placeholder. If socials were supplied, link
+   those in the footer. Never add rel="nofollow".
 6. WHY LIST HERE: short points, every one of them confirmed on TSD's own funnel.
    Permanent page, no monthly fee, no expiration. Live within 5 business days.
    SEO-optimized so San Diegans searching for what you offer find you.
@@ -1001,7 +1065,8 @@ STRUCTURE (this is a directory profile mock-up, not a full website):
    local guide 70,000+ San Diegans read every month, not on a pay-to-play directory.
 8. GALLERY: real photos if provided, otherwise omit.
 9. SOCIAL PROOF: if a rating and review count were supplied above, show them as a stat.
-   You have NO review text. Never write a testimonial quote. If no rating, omit this section.
+   You have NO review text. NEVER ATTRIBUTE A QUOTE TO A CUSTOMER and never invent a testimonial.
+   If no rating, omit this section.
 10. CTA: "Claim this listing for $297, one time, permanent. Live in 5 business days."
    plus a quieter second line: "The $297 comes off your first Sponsored Story if you upgrade later."
    Both drive to {BOOKING_URL}
@@ -1019,16 +1084,36 @@ STRUCTURE (this is an editorial feature mock-up, not a full website):
    "This is a preview of your Sponsored Story" plus gold pill "Claim This Feature →" linking to {BOOKING_URL}
 2. ARTICLE HEADER: a real editorial-style headline about {intel['business_name']}, never a generic
    "About Us" title. Byline "There San Diego Staff", a dateline reading "San Diego", hero photo if provided.
-3. THE STORY: 4-5 short paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice,
-   using their REAL description, services and neighborhood. It should read like a feature a San Diegan
-   would actually enjoy, not an ad. Cover, in this order: what the place is and where it sits,
-   what they actually do best drawn from their real services, what makes it worth the trip,
-   and what a first-time visitor should do. Weave in what they want visitors to do as the closing beat.
+3. THE STORY: 7-9 paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice, using their
+   REAL description, services and neighborhood. It should read like a feature a San Diegan would
+   actually enjoy, not an ad. Break it up so it scans like a magazine piece rather than a wall of text:
+   - Two or three SUBHEADINGS between sections, written as real editorial lines, never "About" or "Services"
+   - One PULL QUOTE styled large and set apart. It must be drawn from THEIR OWN description or services,
+     never attributed to a customer and never in quotation marks as if someone said it
+   - Photos placed BETWEEN paragraphs, not all stacked at the top. See the photo rule below.
+   Cover, in this order: what the place is and where it sits, the story of how it came to be if their
+   own content supports it, what they actually do best drawn from their real services, what makes it
+   worth the trip, what a first-time visitor should do, and a closing beat built on what they want
+   visitors to do. Never pad: if their content does not support nine paragraphs, write seven good ones
+   rather than nine with filler.
 4. THE DETAILS: a short editorial fact box beside or under the story, built ONLY from real data above.
-   Neighborhood, hours, phone, and rating, each only if present. Omit the box if fewer than two exist.
-   Never print "Not listed" or an empty row.
+   Neighborhood, hours, phone, rating, and a link to their website, each only if present. Omit the box
+   if fewer than two exist. Never print "Not listed" or an empty row.
 5. SOCIAL PROOF: if a rating and review count were supplied above, work the stat into the story or the
-   fact box. You have NO review text, so never write a pull quote or a testimonial. If no rating, omit.
+   fact box. You have NO review text.
+   NEVER ATTRIBUTE A QUOTE TO A CUSTOMER and never invent a testimonial, in this section or the pull
+   quote above. The pull quote is THEIR OWN words about themselves, set large. That is editorial.
+   A sentence in quotation marks with a customer's name under it is fabricated evidence.
+   If no rating, omit this section.
+5b. LINKS BACK TO THEIR SITE: this is not decoration, it is the product. A Sponsored Story is sold on
+   "published on ThereSanDiego.com with links back to your website", and the SEO value of the placement
+   IS those links. The page must carry at least THREE, all pointing at https://{intel['domain']}:
+   - the business name in the FIRST paragraph, linked inline
+   - one contextual link mid-article on a real phrase, for example their signature service or menu
+   - one in the fact box or the closing paragraph, reading as a plain invitation to visit their site
+   Use their real domain exactly as given. Style them as normal editorial links, underlined or coloured,
+   never as buttons. Never add rel="nofollow": the whole point of the placement is that the link counts.
+   If their socials were supplied, link those too, in the footer only.
 6. GUARANTEE CALLOUT: "Every Sponsored Story comes with guaranteed impressions. If we don't hit the number, we keep promoting until we do."
 7. REACH: a short stat strip using ThereSanDiego's real audience numbers.
    70,000+ monthly visitors, 700,000+ monthly reach, 25,000 newsletter subscribers,
@@ -1043,6 +1128,11 @@ STRUCTURE (this is an editorial feature mock-up, not a full website):
 10. FOOTER: location, phone, hours."""
     else:
         raise ValueError(f"Unknown offer for generate_offer_lead_magnet_page: {offer!r}")
+
+    # The Sponsored Story is sold on its backlinks, so it carries one more than
+    # the profile does.
+    min_own_links = 3 if offer == "sponsored_story" else 2
+
 
     page_prompt = f"""You are building a personalized lead-magnet PREVIEW PAGE for {intel['business_name']}.
 This is NOT a full business website. See the specific structure below for what it actually is.
@@ -1078,6 +1168,27 @@ Use Tailwind CSS via CDN. Include this in <head>:
 Use Google Fonts matching the brand vibe above.
 NO inline style= attributes. Use Tailwind classes exclusively.
 
+━━━ REQUIRED LINKS ━━━
+Two different destinations. Do not confuse them, and do not let one stand in for the other.
+
+1. THE BUSINESS'S OWN WEBSITE: {own_site_url}
+   This is the one that was missing, and it is the one being sold. A Sponsored Story is bought
+   for "links back to your website"; a Get Listed profile is bought for "links to your website,
+   menu, reservations and social profiles". A page that names the business and never links to it
+   has failed to demonstrate the product.
+   MINIMUM {min_own_links} links to this URL, in the positions named below.
+   Use it VERBATIM, including any path. The path is often what separates this business from
+   whoever owns the root domain, so trimming it can point the prospect at a different company.
+   Never example.com, never "#", never a link to ThereSanDiego instead.
+   Style them as ordinary editorial links. Never rel="nofollow": the link counting is the point.
+
+2. THE BOOKING PAGE: {BOOKING_URL}
+   For the claim bar, the CTA buttons and the plan cards ONLY. This is OUR link, not theirs.
+   It must never replace a link to their own website, and adding more of these does not satisfy
+   the requirement above.
+
+Socials, if supplied, go in the footer. They are additional, not a substitute for the website link.
+
 ━━━ WHAT TO BUILD ━━━
 {page_purpose}
 
@@ -1085,13 +1196,30 @@ NO inline style= attributes. Use Tailwind classes exclusively.
 - Reference {intel.get('neighborhood') or intel.get('location','').split(',')[0]} naturally
 - NEVER write fake testimonials. If no real reviews, skip quotes entirely
 - NEVER invent pricing beyond what's given above
-- Single page, no nav to other pages. This is a standalone lead magnet, not a multi-page site
+- Single page: no nav bar and no links to OTHER PAGES OF THIS MOCKUP, because there are none.
+  This does NOT mean avoid links. Outbound links to the business's own website are REQUIRED,
+  see the REQUIRED LINKS block above
 - NO EM-DASHES anywhere in the copy. Do not use the character "—" or "–". Use a full stop,
   a comma, or a colon instead. This applies to headings, body copy, captions and buttons.
 - Avoid the AI tells: "elevate", "unlock", "seamless", "in today's world", "nestled",
   "whether you're ... or ...", "it's not just X, it's Y". Write the way a local writer would
 - Only state facts given in the intel above. If a detail is missing, leave it out rather than
   filling the gap with a plausible guess
+- LINK TO {own_site_url} using their real URL, never example.com and never "#".
+  The links are the product here, not decoration: a Sponsored Story is sold on the backlinks it
+  carries, and the Get Listed profile is sold on gathering every link in one place. A page that
+  mentions the business and never links to it has failed to demonstrate the thing being bought
+- PHOTO PLACEMENT: spread the supplied photos through the page, one after the header and the rest
+  BETWEEN sections or paragraphs. Never stack them all at the top and never end on a photo wall.
+  Use ONLY the photo URLs given above, in the order given. If none were supplied, write the page
+  without images and do NOT substitute stock photography, an illustration, a solid colour block or
+  an emoji standing in for a picture. A clean page with no image beats an obvious placeholder on a
+  mockup carrying the prospect's own branding
+- USE EACH PHOTO AT MOST ONCE on the page. Never repeat one to fill a second slot, in an <img>, a
+  CSS background or anywhere else. If there are fewer photos than places you had planned to put
+  one, use fewer images. A page showing the same picture twice looks like a template, and the
+  bytes are paid for twice: four images used in seven places produced a 5 MB page that the preview
+  proxy refused to serve at all
 
 ━━━ OUTPUT ━━━
 Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).
@@ -1114,8 +1242,103 @@ Start with <!DOCTYPE html>"""
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
     html = _strip_em_dashes(html)
+
+    # Count the backlinks BEFORE photo inlining, so a base64 blob containing the
+    # domain by coincidence cannot inflate the number.
+    #
+    # The prompt asks for these and the first version that asked was ignored
+    # completely: the page carried six links, every one of them ours, and none
+    # to the business being sold. Asking is not the same as knowing, so this
+    # reports what actually shipped. A warning rather than a raise: a page with
+    # too few links is still a usable mockup, and failing the build would cost
+    # the user a generation over something a rebuild may fix.
+    own_links = _count_own_domain_links(html, intel.get("domain", ""))
+    if own_links < min_own_links:
+        print(
+            f"  [generator] WARNING: {offer} page for {intel['business_name']} carries "
+            f"{own_links} link(s) to {intel.get('domain')!r}, expected at least "
+            f"{min_own_links}. The backlink IS the product on this offer."
+        )
+
     html = _inline_photo_assets(html, photo_assets)
+
+    # The proxy in leadscraper (api/preview/index.ts) refuses anything over
+    # 5 MB with a 502, and the prospect gets a blank "Preview unavailable" while
+    # the build reports success and the row says `ready`. Nothing else in this
+    # chain notices, so say it here where the bytes are known.
+    page_bytes = len(html.encode("utf-8"))
+    if page_bytes > _PREVIEW_PROXY_WARN_BYTES:
+        print(
+            f"  [generator] WARNING: {offer} page for {intel['business_name']} is "
+            f"{page_bytes / 1048576:.2f} MB. The preview proxy rejects anything over 5 MB "
+            f"and serves a blank page, so this may not be viewable."
+        )
+
     return html
+
+
+def _count_own_domain_links(html: str, domain: str) -> int:
+    """How many hrefs point at the prospect's OWN site.
+
+    Only href targets count. The business name appears in body copy on every one
+    of these pages, and a substring search over the whole document would report
+    a page rich in backlinks when it has none, which is the exact failure this
+    is here to catch.
+
+    Socials are excluded deliberately: an Instagram profile is not the website
+    the offer is sold on, and counting it let a page satisfy the requirement
+    while still never linking to the business itself.
+    """
+    if not domain:
+        return 0
+    host = canonical_domain(domain)
+    if not host:
+        return 0
+    hrefs = re.findall(r'<a\b[^>]*\bhref\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE)
+    return sum(1 for h in hrefs if canonical_domain(h) == host)
+
+
+def build_offer_page_site(
+    offer: str,
+    intel: dict,
+    prospect_id: str,
+    vertical: Optional[str] = None,
+    meter=None,
+    photo_assets: Optional[dict] = None,
+) -> str:
+    """Generate ONE offer mockup, inject the chat widget, write it to disk, and
+    return the folder path.
+
+    Exists so api.py can treat an offer page exactly like generate_site's
+    return value and hand it straight to deploy_site. generate_offer_lead_magnet_page
+    deliberately returns a bare HTML string (its prompt says the widget is
+    "injected separately"), which is the right shape for a caller that wants
+    the markup and the wrong shape for the deploy path.
+
+    The widget injection is the same two lines generate_site uses. Keep them in
+    step: a preview that renders without the chat widget is a preview the
+    prospect cannot reply from.
+    """
+    print(f"  [generator] Generating {offer} mockup for {intel['business_name']}...")
+
+    html = generate_offer_lead_magnet_page(
+        offer, intel, vertical=vertical, meter=meter, photo_assets=photo_assets
+    )
+
+    widget_html = _build_chat_widget(intel)
+    if "</body>" in html:
+        html = html.replace("</body>", widget_html + "\n</body>")
+    else:
+        html += widget_html
+
+    site_dir = os.path.join(SITES_DIR, prospect_id)
+    os.makedirs(site_dir, exist_ok=True)
+    index_path = os.path.join(site_dir, "index.html")
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    print(f"  [generator] ✓ {offer} mockup saved to {site_dir}")
+    return site_dir
 
 
 def generate_multi_page_site(
