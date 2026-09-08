@@ -601,6 +601,25 @@ Start with <!DOCTYPE html>"""
     return site_dir
 
 
+# Ceiling on the base64 actually WRITTEN INTO one page, which is not the same
+# as the bytes downloaded. intel's _MAX_PHOTO_TOTAL_BYTES bounds the unique
+# images (2.4 MB raw, ~3.2 MB encoded); this bounds what the page renders, and
+# the two diverge the moment a page uses one photo twice.
+#
+# That is not hypothetical. Pop Pie Co's Get Listed page carried 4 unique images
+# in 7 places, paid for 3 of them twice, and came to 5.04 MB against the preview
+# proxy's 5 MB cap — 38 KB over, served as a blank "Preview unavailable" with a
+# successful build and a `ready` row behind it. The actual markup was 9.6 KB.
+#
+# 3.5 MB leaves ~1.5 MB of headroom under that cap for the HTML itself.
+_MAX_INLINE_RENDER_BYTES = int(os.environ.get("MAX_INLINE_RENDER_BYTES", "3500000"))
+
+# Warn at 4.5 MB, short of the proxy's 5 MB. The budget above should keep every
+# page well under this; if one still trips it, the markup itself has grown and
+# that is worth knowing BEFORE a prospect opens a blank page.
+_PREVIEW_PROXY_WARN_BYTES = int(os.environ.get("PREVIEW_PROXY_WARN_BYTES", "4500000"))
+
+
 def _inline_photo_assets(html: str, assets: Optional[dict]) -> str:
     """Swap the prospect's photo URLs for the bytes intel downloaded (POD01-124).
 
@@ -625,12 +644,38 @@ def _inline_photo_assets(html: str, assets: Optional[dict]) -> str:
     two of the four photos carries two, not four. Plain string replace is safe:
     measured across every live preview, an image src is never HTML-escaped
     (0 of 24 query-string srcs escape their &).
+
+    Bounded by _MAX_INLINE_RENDER_BYTES, and in two passes rather than one:
+    every image gets its FIRST occurrence inlined before any image gets a
+    second. A plain `replace(url, data_uri)` swaps every occurrence, so one
+    photo used twice was written into the page twice, and a page could blow the
+    proxy's 5 MB cap while the byte budget upstream looked fine. Coverage first
+    means a tight budget costs a repeat, never a whole image.
+
+    Occurrences past the budget keep their original URL and hotlink the
+    prospect's server, which is the same fallback a photo we could not download
+    already takes.
     """
     if not assets:
         return html
+
+    spent = 0
+
+    # Pass 1: one occurrence each, so no image is dropped for a duplicate.
     for url, data_uri in assets.items():
-        if url in html:
-            html = html.replace(url, data_uri)
+        if url not in html:
+            continue
+        if spent + len(data_uri) > _MAX_INLINE_RENDER_BYTES:
+            continue
+        html = html.replace(url, data_uri, 1)
+        spent += len(data_uri)
+
+    # Pass 2: whatever budget is left goes on the repeats.
+    for url, data_uri in assets.items():
+        while url in html and spent + len(data_uri) <= _MAX_INLINE_RENDER_BYTES:
+            html = html.replace(url, data_uri, 1)
+            spent += len(data_uri)
+
     return html
 
 
@@ -1170,6 +1215,11 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
   without images and do NOT substitute stock photography, an illustration, a solid colour block or
   an emoji standing in for a picture. A clean page with no image beats an obvious placeholder on a
   mockup carrying the prospect's own branding
+- USE EACH PHOTO AT MOST ONCE on the page. Never repeat one to fill a second slot, in an <img>, a
+  CSS background or anywhere else. If there are fewer photos than places you had planned to put
+  one, use fewer images. A page showing the same picture twice looks like a template, and the
+  bytes are paid for twice: four images used in seven places produced a 5 MB page that the preview
+  proxy refused to serve at all
 
 ━━━ OUTPUT ━━━
 Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).
@@ -1211,6 +1261,19 @@ Start with <!DOCTYPE html>"""
         )
 
     html = _inline_photo_assets(html, photo_assets)
+
+    # The proxy in leadscraper (api/preview/index.ts) refuses anything over
+    # 5 MB with a 502, and the prospect gets a blank "Preview unavailable" while
+    # the build reports success and the row says `ready`. Nothing else in this
+    # chain notices, so say it here where the bytes are known.
+    page_bytes = len(html.encode("utf-8"))
+    if page_bytes > _PREVIEW_PROXY_WARN_BYTES:
+        print(
+            f"  [generator] WARNING: {offer} page for {intel['business_name']} is "
+            f"{page_bytes / 1048576:.2f} MB. The preview proxy rejects anything over 5 MB "
+            f"and serves a blank page, so this may not be viewable."
+        )
+
     return html
 
 

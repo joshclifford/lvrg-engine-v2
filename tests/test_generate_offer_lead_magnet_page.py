@@ -639,3 +639,32 @@ def test_a_path_link_still_counts_toward_the_backlink_minimum():
         '<a href="https://supanbakery.com/en/menu">the pan dulce</a>'
     )
     assert generator._count_own_domain_links(html, "supanbakery.com") == 2
+
+
+@pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
+def test_prompt_forbids_reusing_a_photo(monkeypatch, offer):
+    """Four images in seven places produced a 5 MB page the proxy refused."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page(offer, _intel())
+
+    prompt = _prompt_text(captured)
+    assert "USE EACH PHOTO AT MOST ONCE" in prompt
+    assert "use fewer images" in prompt
+
+
+def test_an_oversized_page_warns_instead_of_failing_silently(monkeypatch, capsys):
+    """A page over the proxy cap builds fine, stores `ready`, and serves blank.
+    Nothing else in the chain notices, so the generator has to say it."""
+    monkeypatch.setattr(generator, "_PREVIEW_PROXY_WARN_BYTES", 1000)
+    big = "<!DOCTYPE html><html><body>" + ("<p>filler</p>" * 400) + "</body></html>"
+    captured = []
+    monkeypatch.setattr(
+        generator, "_get_client", lambda **k: _mock_client(captured, html=big)
+    )
+
+    generator.generate_offer_lead_magnet_page("get_listed", _intel())
+
+    out = capsys.readouterr().out
+    assert "preview proxy rejects anything over 5 MB" in out
