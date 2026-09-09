@@ -1597,13 +1597,21 @@ def _find_attributed_review_claims(html: str, business_name: str = "") -> list:
         # own address. Both are locations and mastheads, not people vouching.
         if _NOT_A_PERSON.search(following):
             continue
-        if business_name and business_name.lower() in following.lower():
-            continue
 
         # The block-tag rewrite leaves ". . ." runs between the card's
         # sibling elements. Collapse them so the warning reads as a name.
         byline = re.sub(r"^[\s.,-]+", "", following)
         byline = re.sub(r"(?:\.\s*){2,}", ". ", byline).strip(" ,")
+
+        # startswith, not "in". An address line reads "<Business>, <City>, ST",
+        # so the name LEADS it. A substring test also matched the business name
+        # anywhere in the byline, and San Diego place names are ordinary
+        # business names here: for a business called "Vista" or "Diego", the
+        # byline "Marcus R., San Diego, CA" contains the name and a real
+        # fabricated testimonial was silently dropped. That fails in the
+        # dangerous direction, a missed invention rather than a false alarm.
+        if business_name and byline.lower().startswith(business_name.lower()):
+            continue
         # 120, not the full quote: the caller prints 200 characters per hit and
         # the NAME is the half that proves it was fabricated, so it must survive
         # the truncation.

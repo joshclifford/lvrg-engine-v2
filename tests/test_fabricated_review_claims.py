@@ -293,6 +293,17 @@ def test_the_claim_bar_is_never_a_candidate_quote():
         assert generator._find_attributed_review_claims(html) == [], bar
 
 
+def test_a_business_named_after_a_place_does_not_hide_a_real_testimonial():
+    """The business-name exclusion matches the START of the byline, not anywhere
+    in it. San Diego place names are ordinary business names here, so a
+    substring test meant a business called "Vista" or "Diego" silently swallowed
+    "Marcus R., San Diego, CA" — a missed fabrication, which is the dangerous
+    direction for this check to fail in."""
+    card = '<p>"' + "x" * 45 + '"</p><div>Marcus R.</div><div>San Diego, CA</div>'
+    for name in ("Diego", "Vista", "Carlsbad", "Pop Pie Co", ""):
+        assert generator._find_attributed_review_claims(card, name), name
+
+
 def test_a_person_vouching_still_fires_after_the_narrowing():
     """The exclusions must not cost the shape they were narrowed around."""
     for html in (
