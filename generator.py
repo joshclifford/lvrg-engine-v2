@@ -1421,14 +1421,31 @@ _TESTIMONIAL_HEADING = (
     r"|\bwhat\s+people\s+are\s+saying\b"
 )
 # The testimonial byline convention: "Marcus R.", "Marcus R., San Diego, CA",
-# "Sarah, La Jolla". A bare business name does not match, which is what keeps
-# the Sponsored Story's sanctioned pull quote (their OWN words) out of it.
+# "Sarah, La Jolla".
+#
 # The trailing guard is (?![a-zA-Z]), not \s: block ends are rewritten to ". "
 # above, so a byline arrives as "Marcus R.." and requiring whitespace or a comma
 # after the initial missed all three testimonials on the one page that has them.
 _TESTIMONIAL_BYLINE = (
     r"[A-Z][a-z]+\s+[A-Z]\.(?![a-zA-Z])"                    # Marcus R.
     r"|[A-Z][a-z]+\s*,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s*,\s*[A-Z]{2}\b"  # Ana, San Diego, CA
+)
+
+# `Word, City, ST` is also what an ADDRESS looks like, and what the Sponsored
+# Story's own dateline looks like. The prompt mandates a byline of "There San
+# Diego Staff" and a dateline of "San Diego"; a Get Listed profile is built
+# around the business's address. Neither is a testimonial, and warning on either
+# means warning on content the prompt requires.
+#
+# So a byline match is discarded when the surrounding text shows it is the
+# publication's own or the business's own.
+_NOT_A_PERSON = re.compile(r"\bstaff\b|\bby\s+there\b|\bteam\b|\beditor", re.IGNORECASE)
+
+# Boilerplate the prompt writes in quotation marks and every page carries. These
+# are 41 to 51 characters, so they clear the 40-char floor for a candidate quote
+# and would pair with any address later in the header.
+_CLAIM_BAR_QUOTE = re.compile(
+    r"^\s*(?:this is a preview of|this site was built for)", re.IGNORECASE
 )
 
 
@@ -1443,7 +1460,7 @@ def _warn_fabricated_reviews(html: str, label: str, business_name: str) -> list:
     page in output/sites, not on a lead magnet. Three invented customers with
     names and cities, on a page carrying a real business's branding.
     """
-    hits = _find_attributed_review_claims(html)
+    hits = _find_attributed_review_claims(html, business_name)
     if hits:
         print(
             f"  [generator] WARNING: {label} page for {business_name} reports what reviewers "
@@ -1457,8 +1474,13 @@ def _warn_fabricated_reviews(html: str, label: str, business_name: str) -> list:
     return hits
 
 
-def _find_attributed_review_claims(html: str) -> list:
+def _find_attributed_review_claims(html: str, business_name: str = "") -> list:
     """Invented review evidence on a page that was given no review text.
+
+    `business_name` is optional and only sharpens shape 3: a Get Listed profile
+    prints the business's own address, which has the same `Word, City, ST` shape
+    as a testimonial byline. Knowing the name separates "Pop Pie Co, La Jolla,
+    CA" (a location) from "Marcus R., San Diego, CA" (a person vouching).
 
     Every generated page is given a star rating and a count and nothing else
     (see _build_reviews_block). So anything on the finished page claiming to
@@ -1559,17 +1581,33 @@ def _find_attributed_review_claims(html: str) -> list:
     #    OWN words, which the Sponsored Story prompt asks for) out of the
     #    results.
     for match in re.finditer(r"[\"“]([^\"“”]{40,400})[\"”]", text):
-        following = text[match.end():match.end() + 120]
-        if re.search(_TESTIMONIAL_BYLINE, following):
-            quote = match.group(1).strip()
-            # The block-tag rewrite leaves ". . ." runs between the card's
-            # sibling elements. Collapse them so the warning reads as a name.
-            byline = re.sub(r"^[\s.,-]+", "", following)
-            byline = re.sub(r"(?:\.\s*){2,}", ". ", byline).strip(" ,")
-            # 120, not the full quote: the caller prints 200 characters per hit
-            # and the NAME is the half that proves it was fabricated, so it must
-            # survive the truncation.
-            hits.append(f'"{quote[:120]}..." attributed to "{byline[:50].strip(" ,")}"')
+        quote = match.group(1).strip()
+        # The claim bar is quoted boilerplate on every page. Pairing it with an
+        # address further down the header produced a hit on three clean pages.
+        if _CLAIM_BAR_QUOTE.match(quote):
+            continue
+        # 60, not 120. A testimonial byline sits directly under its quote — on
+        # the real page it starts 14 characters after it. The wider window
+        # bought nothing and let a quote pair with an address elsewhere in the
+        # layout.
+        following = text[match.end():match.end() + 60]
+        if not re.search(_TESTIMONIAL_BYLINE, following):
+            continue
+        # The publication's own byline, or the business's own name beside its
+        # own address. Both are locations and mastheads, not people vouching.
+        if _NOT_A_PERSON.search(following):
+            continue
+        if business_name and business_name.lower() in following.lower():
+            continue
+
+        # The block-tag rewrite leaves ". . ." runs between the card's
+        # sibling elements. Collapse them so the warning reads as a name.
+        byline = re.sub(r"^[\s.,-]+", "", following)
+        byline = re.sub(r"(?:\.\s*){2,}", ". ", byline).strip(" ,")
+        # 120, not the full quote: the caller prints 200 characters per hit and
+        # the NAME is the half that proves it was fabricated, so it must survive
+        # the truncation.
+        hits.append(f'"{quote[:120]}..." attributed to "{byline[:50].strip(" ,")}"')
 
     # A page can trip more than one shape on the same testimonial (the section
     # heading AND the byline under it). Dedupe on the text so the warning lists

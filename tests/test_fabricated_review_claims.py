@@ -218,6 +218,90 @@ def test_the_split_keeps_every_real_catch():
         assert generator._find_attributed_review_claims(f"<p>{line}</p>"), line
 
 
+# ── the offer pages, which nothing had ever been tested against ─────────────
+# output/sites holds five pages and every one is a Smart Site build (claim bar
+# reads "Claim This Site"). The two page types this whole check exists for had
+# only ever been tested against snippets, and the shapes below are what turned
+# up the moment a full one was written out to the prompt's own spec.
+
+CLEAN_SPONSORED_STORY = """<!DOCTYPE html><html><body>
+<div>"This is a preview of your Sponsored Story" <a href="#">Claim This Feature</a></div>
+<h1>The Bakery That Made La Jolla Rethink Dessert</h1>
+<p>By There San Diego Staff, San Diego, CA</p>
+<p>Pop Pie Co has been baking savory pies in La Jolla since 2016.</p>
+<h2>What the neighborhood knows</h2>
+<p>Regulars line up before noon. The shop keeps hours that suit locals.</p>
+<blockquote>We bake everything the morning we sell it, and we always have.</blockquote>
+<p>Rated 4.7 stars from 1,714 reviews.</p>
+<h2>Reach</h2>
+<p>70,000+ monthly visitors. 700,000+ monthly reach. 25,000+ newsletter subscribers.
+80,000+ social followers across Facebook and Instagram.</p>
+</body></html>"""
+
+CLEAN_GET_LISTED = """<!DOCTYPE html><html><body>
+<div>"This is a preview of your ThereSanDiego.com listing" <a href="#">Claim This Listing</a></div>
+<h1>Pop Pie Co</h1><p>Pop Pie Co, La Jolla, CA</p>
+<h2>Why List Here</h2>
+<p>This listing lives on a local guide 70,000+ San Diegans read every month, not on a
+pay-to-play directory. Permanent page, no monthly fee. Live within 5 business days.</p>
+<p>Rated 4.7 stars from 1,714 reviews.</p>
+</body></html>"""
+
+
+def test_a_clean_sponsored_story_is_silent():
+    """Built to the prompt's spec: mandated byline and dateline, an unquoted
+    pull quote, the real rating stat, the audience strip. Nothing invented."""
+    assert generator._find_attributed_review_claims(CLEAN_SPONSORED_STORY, "Pop Pie Co") == []
+
+
+def test_a_clean_get_listed_is_silent():
+    """A directory profile is built around the business's address, and
+    "Pop Pie Co, La Jolla, CA" has the same shape as a testimonial byline."""
+    assert generator._find_attributed_review_claims(CLEAN_GET_LISTED, "Pop Pie Co") == []
+
+
+def test_the_publications_own_byline_is_not_a_testimonial():
+    """The Sponsored Story prompt REQUIRES byline "There San Diego Staff" and a
+    dateline of "San Diego". Warning on it is warning on required content."""
+    for byline in (
+        "By There San Diego Staff, San Diego, CA",
+        "There San Diego Staff, San Diego, CA",
+    ):
+        html = '<p>"' + "z" * 45 + f'"</p><p>{byline}</p>'
+        assert generator._find_attributed_review_claims(html) == [], byline
+
+
+def test_the_businesss_own_address_is_not_a_byline():
+    """Knowing the business name is what separates a location from a person."""
+    html = (
+        "<blockquote>\"We bake everything the morning we sell it, every day.\"</blockquote>"
+        "<p>Pop Pie Co, La Jolla, CA</p>"
+    )
+    assert generator._find_attributed_review_claims(html, "Pop Pie Co") == []
+
+
+def test_the_claim_bar_is_never_a_candidate_quote():
+    """The prompt writes the claim bar inside quotation marks and it clears the
+    40-character floor, so it paired with any address later in the header."""
+    for bar in (
+        "This is a preview of your Sponsored Story",
+        "This is a preview of your ThereSanDiego.com listing",
+        "This site was built for Pop Pie Co by LVRG Agency",
+    ):
+        assert len(bar) >= 40, bar
+        html = f'<div>"{bar}"</div><p>Ana, San Diego, CA</p>'
+        assert generator._find_attributed_review_claims(html) == [], bar
+
+
+def test_a_person_vouching_still_fires_after_the_narrowing():
+    """The exclusions must not cost the shape they were narrowed around."""
+    for html in (
+        '<p>"' + "x" * 45 + '"</p><div>Marcus R.</div><div>San Diego, CA</div>',
+        '<p>"' + "y" * 45 + '"</p><div>Ana, San Diego, CA</div>',
+    ):
+        assert generator._find_attributed_review_claims(html, "Pop Pie Co"), html
+
+
 def test_smart_site_is_checked_too(monkeypatch, tmp_path):
     """The fabricated testimonials that prompted all of this were found on a
     SMART SITE page in output/sites, not on a lead magnet. Checking only the two
