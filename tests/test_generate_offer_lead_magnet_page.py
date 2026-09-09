@@ -531,11 +531,14 @@ def test_pull_quote_is_still_never_attributed_to_a_customer(monkeypatch):
     prompt = _prompt_text(captured)
     assert "YOU WERE GIVEN NO REVIEW TEXT" in prompt
     assert "THEIR OWN words about themselves" in prompt
-    # The pull quote is the one quotation the page may carry. Said explicitly,
-    # because "you may set a quote large" and "you have no quotes" are easy to
-    # read as contradicting each other, and the model resolved that the wrong
-    # way once already.
-    assert "the only quotation this page may carry" in prompt
+
+    # Item 3 says the pull quote is "never in quotation marks as if someone said
+    # it". An earlier version of item 5 called it "the only quotation this page
+    # may carry", which reads as permission to add the marks item 3 forbids, on
+    # the one element most likely to turn into a fake testimonial. The two items
+    # have to agree.
+    assert "WITHOUT quotation" in prompt
+    assert "the only quotation this page may carry" not in prompt
 
 
 # ── the backlink guard ──────────────────────────────────────────────────────

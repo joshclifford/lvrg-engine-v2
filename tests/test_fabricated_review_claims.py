@@ -187,6 +187,37 @@ def test_a_page_with_no_reviews_section_at_all_stays_silent():
     assert generator._find_attributed_review_claims(html) == []
 
 
+def test_a_sanctioned_pull_quote_mentioning_locals_is_not_a_hit():
+    """The Sponsored Story prompt ASKS for a pull quote drawn from the business's
+    own copy, in a voice it calls "locals-know-locals". So a pull quote reading
+    "...for the locals who kept asking" is quote marks plus a soft noun, and
+    treating that as enough warned on output the prompt had just requested.
+
+    That is the same defect as the preview/review one: a warning that fires on
+    legitimate output is a warning nobody reads. Quote marks alone now only
+    count beside a reviewer or a platform.
+    """
+    for line in (
+        '"We built this place for the locals who kept asking us to open one."',
+        '"Our guests come for the pie and stay for the patio."',
+        '"Twenty years of visitors and we still bake it the same way."',
+    ):
+        assert generator._find_attributed_review_claims(f"<blockquote>{line}</blockquote>") == [], line
+
+
+def test_the_split_keeps_every_real_catch():
+    """The narrowing must not cost a single genuine finding: each of these
+    carries either a reporting verb or a reviewer/platform noun."""
+    for line in (
+        POP_PIE_LINE,                                             # strict + reporting
+        "Yelp reviewers consistently praise the flaky crust.",     # strict + reporting
+        'Regulars describe it as "the best pie in San Diego".',    # soft + reporting
+        "Diners say the service is quick.",                        # soft + reporting
+        'Reviewers call it "the best in town".',                   # strict + quoted
+    ):
+        assert generator._find_attributed_review_claims(f"<p>{line}</p>"), line
+
+
 def test_smart_site_is_checked_too(monkeypatch, tmp_path):
     """The fabricated testimonials that prompted all of this were found on a
     SMART SITE page in output/sites, not on a lead magnet. Checking only the two

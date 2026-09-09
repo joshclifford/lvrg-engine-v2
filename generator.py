@@ -1166,8 +1166,10 @@ STRUCTURE (this is an editorial feature mock-up, not a full website):
    The failure was not a fake testimonial with a name under it. It was a line in the middle of the
    story reading "Yelp reviewers have specifically called out ..." on a page with no review text
    behind it. An editorial voice makes that sentence easy to write and no less invented.
-   The pull quote is THEIR OWN words about themselves, set large. That is editorial,
-   and it is the only quotation this page may carry.
+   The pull quote is THEIR OWN words about themselves, set large and WITHOUT quotation
+   marks, exactly as item 3 says. Set large is what makes it a pull quote. Quotation
+   marks would make it look like someone said it to a reporter, and nobody did.
+   This page carries no quoted speech at all.
    If no rating, omit this section.
 5b. LINKS BACK TO THEIR SITE: this is not decoration, it is the product. A Sponsored Story is sold on
    "published on ThereSanDiego.com with links back to your website", and the SEO value of the placement
@@ -1383,6 +1385,19 @@ _REVIEW_SOURCE = (
     r"google\s+(?:reviews?|ratings?)|regulars|patrons|diners|customers|"
     r"guests|visitors|locals)\b"
 )
+# The subset that is a claim about EVIDENCE rather than a way of saying "people".
+#
+# The distinction earns its place on the quoted branch. The Sponsored Story asks
+# for a pull quote drawn from the business's own copy, in a voice the same prompt
+# calls "locals-know-locals" — so a sanctioned pull quote reading "...for the
+# locals who kept asking us to open one." is quote marks plus a soft noun, and
+# treating that as enough warns on output the prompt just requested. Reviewers
+# and platforms are different: there is no innocent reason for those to appear
+# beside a quotation on a page that was handed no review text.
+_REVIEW_SOURCE_STRICT = (
+    r"\b(?:reviewers?|reviews?|testimonials?|yelp|tripadvisor|trip\s+advisor|"
+    r"google\s+(?:reviews?|ratings?))\b"
+)
 # Reporting verbs: the sentence claims to know what those people SAID.
 #
 # Deliberately excludes the feeling verbs — love, adore, swear by is borderline
@@ -1513,8 +1528,13 @@ def _find_attributed_review_claims(html: str) -> list:
             continue
         quoted = re.search(r"[\"“”'‘’]", sentence) is not None
         reporting = re.search(_REVIEW_REPORTING, sentence, re.IGNORECASE) is not None
+        strict = re.search(_REVIEW_SOURCE_STRICT, sentence, re.IGNORECASE) is not None
 
-        if quoted or reporting:
+        # A reporting verb is a claim about what someone said whoever they are,
+        # so any source noun counts there ("Diners say the service is quick").
+        # Quote marks ALONE only count beside a reviewer or a platform, or the
+        # sanctioned pull quote trips it (see _REVIEW_SOURCE_STRICT).
+        if reporting or (quoted and strict):
             hits.append(sentence.strip())
 
     # 2. A testimonials section, by heading. "What Our Guests Say" is the same
