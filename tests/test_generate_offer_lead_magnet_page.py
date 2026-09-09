@@ -202,9 +202,22 @@ def test_every_advertised_number_matches_the_live_tsd_funnel(monkeypatch):
         assert price in prompt
         assert impressions in prompt
 
-    # Audience figures, verbatim from the funnel homepage.
-    for stat in ("70,000+", "700,000+", "25,000", "82,000"):
+    # Audience figures, verbatim from the client's own "real numbers to hold to"
+    # in campaign-advertising.md, which is the list TSD's own reps work from.
+    #
+    # 80,000+, not 82,000. The template carried 82,000 and this test asserted it,
+    # so the guardrail agreed with the copy and neither noticed (POD01-129). The
+    # client's figure is "80,000+ social followers (40k Facebook + 42k
+    # Instagram)": someone added the two components, published the sum as an
+    # exact count, and dropped the "+". It is a small inflation of a number the
+    # client's own guardrails end with the words "Don't inflate", on a page whose
+    # whole job is to be trusted by the business it names.
+    #
+    # Assert the "+" too. It is the difference between a floor TSD publishes and
+    # an exact count nobody measured.
+    for stat in ("70,000+", "700,000+", "25,000+", "80,000+"):
         assert stat in prompt
+    assert "82,000" not in prompt
 
     captured.clear()
     generator.generate_offer_lead_magnet_page("get_listed", _intel())
@@ -389,17 +402,27 @@ def test_neither_offer_asks_for_testimonial_quotes(monkeypatch, offer):
 
     The Sponsored Story does now ask for a pull quote (PM review, 8 Sep 2026).
     That is deliberate and safe: it is the business's own copy set large, which
-    is ordinary editorial. What stays banned is attribution to a person, which
+    is ordinary editorial. What stays banned is attribution to a REVIEWER, which
     is what turns a design flourish into fabricated evidence. This test pins the
-    attribution rule rather than the words "pull quote"."""
+    attribution rule rather than the words "pull quote".
+
+    Widened after POD01-133. The rule used to name only a customer, and the live
+    Pop Pie Co page published "Yelp reviewers have specifically called out ...",
+    which named no customer and so passed every guard while being the same
+    invention. The ban is on the attribution, so the prompt has to close the
+    unnamed-group and named-platform shapes too."""
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
     generator.generate_offer_lead_magnet_page(offer, _intel())
 
     prompt = _prompt_text(captured)
-    assert "NEVER ATTRIBUTE A QUOTE TO A CUSTOMER" in prompt
-    assert "never invent a testimonial" in prompt
+    assert "YOU WERE GIVEN NO REVIEW TEXT" in prompt
+    # The shapes that got through: an unnamed group, and a named platform.
+    assert "Yelp" in prompt and "TripAdvisor" in prompt
+    assert '"reviewers"' in prompt
+    # A paraphrase is the same claim with the punctuation removed.
+    assert "No unquoted paraphrase either" in prompt
     assert "TESTIMONIALS" not in prompt
 
 
@@ -506,8 +529,13 @@ def test_pull_quote_is_still_never_attributed_to_a_customer(monkeypatch):
     generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
 
     prompt = _prompt_text(captured)
-    assert "NEVER ATTRIBUTE A QUOTE TO A CUSTOMER" in prompt
+    assert "YOU WERE GIVEN NO REVIEW TEXT" in prompt
     assert "THEIR OWN words about themselves" in prompt
+    # The pull quote is the one quotation the page may carry. Said explicitly,
+    # because "you may set a quote large" and "you have no quotes" are easy to
+    # read as contradicting each other, and the model resolved that the wrong
+    # way once already.
+    assert "the only quotation this page may carry" in prompt
 
 
 # ── the backlink guard ──────────────────────────────────────────────────────

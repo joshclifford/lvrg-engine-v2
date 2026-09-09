@@ -18,7 +18,7 @@ import anthropic
 
 import cost
 from claude_text import first_text
-from config import SITES_DIR, BOOKING_URL, SENDER_NAME, SENDER_AGENCY
+from config import SITES_DIR, BOOKING_URL, build_booking_url, SENDER_NAME, SENDER_AGENCY
 # One definition of "the same host", shared with the slug builder. Comparing
 # raw href strings would miss www. and a trailing slash.
 from slug import canonical_domain
@@ -374,6 +374,42 @@ Only use a photo if it makes sense in context — don't force it."""
     return "PHOTOS: No real photos available. Use CSS gradients and brand colors only — no placeholder images."
 
 
+# The one wording every prompt uses for "you were given no review text".
+#
+# Kept as one constant because the previous wording was written out three times
+# and every copy banned the same single shape: a quote attributed to a CUSTOMER,
+# with a name under it. The live Pop Pie Co Sponsored Story published
+#
+#   "Yelp reviewers have specifically called out the key lime pie after a
+#    recipe overhaul, calling it exactly what 'was needed'"
+#
+# which names no customer and so broke none of them, while being the same
+# fabrication: a quoted fragment attributed to real third parties on a real
+# platform, on a page emailed to the business itself as a pitch. The business
+# owner is one search away from finding the quote does not exist (POD01-133).
+#
+# So the rule is about the ATTRIBUTION, not the shape of the sentence. Naming
+# the platforms matters: the model reached for "Yelp reviewers" specifically,
+# and a rule phrased only around "customers" reads as permission for the rest.
+NO_REVIEW_TEXT_RULE = (
+    "YOU WERE GIVEN NO REVIEW TEXT. Not one review, not a snippet, not a summary. "
+    "So you cannot report what any reviewer said, in any form:\n"
+    "- No quotation marks around anything a customer, reviewer or visitor is said to have said.\n"
+    "- No unquoted paraphrase either. \"Reviewers praise the pastries\" is the same claim "
+    "without the punctuation, and is equally fabricated.\n"
+    "- No attributing a REVIEW OR AN OPINION to Yelp, Google, TripAdvisor, Facebook or any "
+    "other platform, or to \"reviewers\", \"regulars\", \"locals\" or \"customers\" as a group. "
+    "An unnamed group is not safer than a named person, it is only harder to check.\n"
+    "- No claims about what reviewers \"often mention\", \"call out\", \"rave about\" or \"agree on\".\n"
+    "The star rating and review count above, if any were given, are the ONLY things you know "
+    "about this business's reviews. Report those as bare numbers and stop there.\n"
+    "This is a ban on REPORTING OPINIONS YOU WERE NOT GIVEN, not on the local voice. Writing "
+    "warmly about the place, the neighborhood and who it is for is the whole job and stays. "
+    "\"A North Park favorite for twenty years\" is fine if their own copy says so. "
+    "\"Locals say it is a North Park favorite\" is not, because you were told no such thing."
+)
+
+
 def _build_reviews_block(intel: dict) -> str:
     # Build reviews block. Rating and review count are real data passed in from
     # the app (Google Maps via Apify), never scraped.
@@ -408,17 +444,16 @@ def _build_reviews_block(intel: dict) -> str:
     if rating is not None and review_count is not None and review_count > 0:
         return (
             f"SOCIAL PROOF: This business is rated {rating}★ from {review_count} reviews. "
-            f"Use that as a stat. You have NO review text — do NOT write testimonial quotes."
+            f"Use that as a stat, and nothing beyond it.\n{NO_REVIEW_TEXT_RULE}"
         )
     elif rating is not None:
         return (
             f"SOCIAL PROOF: This business is rated {rating}★. Use that as a stat. "
-            f"You were NOT given a review count — do not state one. "
-            f"You have NO review text — do NOT write testimonial quotes."
+            f"You were NOT given a review count, so do not state one.\n{NO_REVIEW_TEXT_RULE}"
         )
     return (
-        "REVIEWS: None available. Do NOT write testimonial quotes, do NOT invent "
-        "star ratings, and do NOT add a testimonials section."
+        "REVIEWS: None available. Do NOT invent star ratings and do NOT add a "
+        f"testimonials section.\n{NO_REVIEW_TEXT_RULE}"
     )
 
 
@@ -468,6 +503,9 @@ def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[d
 
     notes_block = f"\n\nSPECIAL INSTRUCTIONS:\n{notes}\n" if notes else ""
     design = _get_design_personality(intel.get("business_type", "other"))
+    # Attribution on the Claim This Site CTA, same helper the two offer magnets
+    # use, so all three offer types report clicks the same way (POD01-130).
+    booking_url = build_booking_url("smart_site", prospect_id)
     pain_point = _pain_point_context(intel, r6)
 
     photo_block = _build_photo_block(intel)
@@ -521,7 +559,9 @@ Build a single-file HTML homepage (index.html).
 
 1. CLAIM BAR — sticky, black bg, centered single line:
    "This site was built for **{intel['business_name']}** by LVRG Agency"
-   + gold pill "Claim This Site →" button linking to {BOOKING_URL}
+   + gold pill "Claim This Site →" button linking to {booking_url}
+   Use that URL exactly as written, query string included: the params say which lead and
+   which offer the click came from, and a CTA that drops them arrives anonymous.
    Everything centered on one line. No left/right split.
 
 2. NAV — business name as logo, 3-4 links, primary CTA button
@@ -580,6 +620,7 @@ Start with <!DOCTYPE html>"""
     html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
+    _warn_fabricated_reviews(html, "smart site", intel.get("business_name", ""))
     html = _inline_photo_assets(html, photo_assets)
 
     # Inject chat widget before </body> — now always present, so the else is
@@ -718,6 +759,7 @@ def generate_page(
     r6: Optional[dict] = None,
     meter=None,
     photo_assets: Optional[dict] = None,
+    prospect_id: str = "",
 ) -> str:
     """Generate ONE page of a multi-page site. Returns raw HTML — does not
     write to disk (generate_multi_page_site owns the filesystem). `design`
@@ -736,6 +778,9 @@ def generate_page(
     """
     notes_block = f"\n\nSPECIAL INSTRUCTIONS:\n{notes}\n" if notes else ""
     pain_point = _pain_point_context(intel, r6)
+    # Every page of a multi-page build carries the same claim bar, so every one
+    # of them needs the same attributed CTA (POD01-130).
+    booking_url = build_booking_url("smart_site", prospect_id)
 
     photo_block = _build_photo_block(intel)
     reviews_block = _build_reviews_block(intel)
@@ -829,7 +874,9 @@ This is a single HTML page ({page['filename']}), one of {len(nav)} pages in this
 
 1. CLAIM BAR — sticky, black bg, centered single line:
    "This site was built for **{intel['business_name']}** by LVRG Agency"
-   + gold pill "Claim This Site →" button linking to {BOOKING_URL}
+   + gold pill "Claim This Site →" button linking to {booking_url}
+   Use that URL exactly as written, query string included: the params say which lead and
+   which offer the click came from, and a CTA that drops them arrives anonymous.
    Everything centered on one line. No left/right split.
 
 2. NAV — business name as logo, links to every page listed above (active page marked), primary CTA button
@@ -865,6 +912,7 @@ Start with <!DOCTYPE html>"""
     html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
+    _warn_fabricated_reviews(html, f"smart site page {page['filename']}", intel.get("business_name", ""))
     html = _inline_photo_assets(html, photo_assets)
     return html
 
@@ -999,6 +1047,7 @@ def generate_offer_lead_magnet_page(
     vertical: Optional[str] = None,
     meter=None,
     photo_assets: Optional[dict] = None,
+    prospect_id: str = "",
 ) -> str:
     """Generate a single-page mockup for the Get Listed or Sponsored Story
     lead magnet. `offer` is "get_listed" or "sponsored_story". `vertical`
@@ -1018,6 +1067,13 @@ def generate_offer_lead_magnet_page(
     press_block = _build_press_block(intel)
     social_block = _build_social_block(intel)
 
+    # Carries which lead, which offer and which page the click came from, so a
+    # booked call arrives with context instead of being reconstructed live
+    # (POD01-130). prospect_id is optional: run_engine.py and the tests build
+    # pages without one, and a magnet with unattributed CTAs still beats a
+    # failed build.
+    booking_url = build_booking_url(offer, prospect_id)
+
     # Their real page, not the bare root. A business living inside a larger
     # site shares a domain with its parent, so the root is somebody else's
     # homepage (POD01-34). Falls back to the domain when there is no path,
@@ -1034,7 +1090,7 @@ Get Listed ($297 one-time, permanent profile) prospect. Build it around {detail_
 
 STRUCTURE (this is a directory profile mock-up, not a full website):
 1. CLAIM BAR: sticky, same as every LVRG preview.
-   "This is a preview of your ThereSanDiego.com listing" plus gold pill "Claim This Listing →" linking to {BOOKING_URL}
+   "This is a preview of your ThereSanDiego.com listing" plus gold pill "Claim This Listing →" linking to {booking_url}
 2. PROFILE HEADER: business name, {role} framing, location and neighborhood, primary photo.
    If a rating was supplied above, show it here as a star stat next to the name.
 3. ABOUT: 4-6 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice, broken into
@@ -1064,12 +1120,13 @@ STRUCTURE (this is a directory profile mock-up, not a full website):
 7. WHERE THIS SITS: one short line placing the profile in context, that it lives on a
    local guide 70,000+ San Diegans read every month, not on a pay-to-play directory.
 8. GALLERY: real photos if provided, otherwise omit.
-9. SOCIAL PROOF: if a rating and review count were supplied above, show them as a stat.
-   You have NO review text. NEVER ATTRIBUTE A QUOTE TO A CUSTOMER and never invent a testimonial.
+9. SOCIAL PROOF: if a rating and review count were supplied above, show them as a stat, and
+   nothing more than the stat. Re-read the REVIEWS rule above before writing this section: you
+   were given no review text, so this section is two numbers, not a sentence about what anyone said.
    If no rating, omit this section.
 10. CTA: "Claim this listing for $297, one time, permanent. Live in 5 business days."
    plus a quieter second line: "The $297 comes off your first Sponsored Story if you upgrade later."
-   Both drive to {BOOKING_URL}
+   Both drive to {booking_url}
 11. FOOTER: location, phone, hours."""
     elif offer == "sponsored_story":
         # Do not price this off First Look. First Look ($197 one-time) is a SOCIAL
@@ -1081,7 +1138,7 @@ Advertising prospect on a Sponsored Story plan, of which LOCAL at $497/month is 
 
 STRUCTURE (this is an editorial feature mock-up, not a full website):
 1. CLAIM BAR: sticky, same as every LVRG preview.
-   "This is a preview of your Sponsored Story" plus gold pill "Claim This Feature →" linking to {BOOKING_URL}
+   "This is a preview of your Sponsored Story" plus gold pill "Claim This Feature →" linking to {booking_url}
 2. ARTICLE HEADER: a real editorial-style headline about {intel['business_name']}, never a generic
    "About Us" title. Byline "There San Diego Staff", a dateline reading "San Diego", hero photo if provided.
 3. THE STORY: 7-9 paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice, using their
@@ -1100,10 +1157,13 @@ STRUCTURE (this is an editorial feature mock-up, not a full website):
    Neighborhood, hours, phone, rating, and a link to their website, each only if present. Omit the box
    if fewer than two exist. Never print "Not listed" or an empty row.
 5. SOCIAL PROOF: if a rating and review count were supplied above, work the stat into the story or the
-   fact box. You have NO review text.
-   NEVER ATTRIBUTE A QUOTE TO A CUSTOMER and never invent a testimonial, in this section or the pull
-   quote above. The pull quote is THEIR OWN words about themselves, set large. That is editorial.
-   A sentence in quotation marks with a customer's name under it is fabricated evidence.
+   fact box. The stat is the whole of it. Re-read the REVIEWS rule above and apply it here AND in the
+   pull quote AND anywhere in the article body, because this is the section that has broken before.
+   The failure was not a fake testimonial with a name under it. It was a line in the middle of the
+   story reading "Yelp reviewers have specifically called out ..." on a page with no review text
+   behind it. An editorial voice makes that sentence easy to write and no less invented.
+   The pull quote is THEIR OWN words about themselves, set large. That is editorial,
+   and it is the only quotation this page may carry.
    If no rating, omit this section.
 5b. LINKS BACK TO THEIR SITE: this is not decoration, it is the product. A Sponsored Story is sold on
    "published on ThereSanDiego.com with links back to your website", and the SEO value of the placement
@@ -1116,15 +1176,18 @@ STRUCTURE (this is an editorial feature mock-up, not a full website):
    If their socials were supplied, link those too, in the footer only.
 6. GUARANTEE CALLOUT: "Every Sponsored Story comes with guaranteed impressions. If we don't hit the number, we keep promoting until we do."
 7. REACH: a short stat strip using ThereSanDiego's real audience numbers.
-   70,000+ monthly visitors, 700,000+ monthly reach, 25,000 newsletter subscribers,
-   82,000 social followers across Facebook and Instagram. Do not inflate or invent any of these.
+   70,000+ monthly visitors, 700,000+ monthly reach, 25,000+ newsletter subscribers,
+   80,000+ social followers across Facebook and Instagram. Do not inflate or invent any of these.
+   Carry the "+" where it is written above. These are TSD's own published figures and the "+"
+   is part of them: 80,000+ is what the client's rep guardrails say to hold to, and dropping it
+   turns a floor into an exact count we did not measure.
 8. PLANS: the three real tiers, as three simple cards. State the monthly price plainly.
    These are MONTHLY plans and must never be shown as a one-time fee.
    - LOCAL, $497/month, 10,000 guaranteed impressions a month, neighborhood targeting, one story per quarter
    - CITYWIDE, $997/month, 25,000 guaranteed impressions a month, the full San Diego metro, one story per month
    - COUNTYWIDE, $1,500/month, 50,000 guaranteed impressions a month, all of San Diego County, one story per month
    Under the cards, one line: "Every plan includes ad campaign management and geo, age and demographic targeting. Organic impressions are never charged."
-9. CTA: driving to {BOOKING_URL}
+9. CTA: driving to {booking_url}
 10. FOOTER: location, phone, hours."""
     else:
         raise ValueError(f"Unknown offer for generate_offer_lead_magnet_page: {offer!r}")
@@ -1182,10 +1245,13 @@ Two different destinations. Do not confuse them, and do not let one stand in for
    Never example.com, never "#", never a link to ThereSanDiego instead.
    Style them as ordinary editorial links. Never rel="nofollow": the link counting is the point.
 
-2. THE BOOKING PAGE: {BOOKING_URL}
+2. THE BOOKING PAGE: {booking_url}
    For the claim bar, the CTA buttons and the plan cards ONLY. This is OUR link, not theirs.
    It must never replace a link to their own website, and adding more of these does not satisfy
    the requirement above.
+   Use this URL EXACTLY as written, query string included. The params after the "?" say which
+   lead and which offer the click came from, and a CTA that drops them arrives anonymous.
+   Do not shorten it, do not strip it back to the bare domain, do not vary it between buttons.
 
 Socials, if supplied, go in the footer. They are additional, not a substitute for the website link.
 
@@ -1260,6 +1326,8 @@ Start with <!DOCTYPE html>"""
             f"{min_own_links}. The backlink IS the product on this offer."
         )
 
+    _warn_fabricated_reviews(html, offer, intel.get("business_name", ""))
+
     html = _inline_photo_assets(html, photo_assets)
 
     # The proxy in leadscraper (api/preview/index.ts) refuses anything over
@@ -1298,6 +1366,198 @@ def _count_own_domain_links(html: str, domain: str) -> int:
     return sum(1 for h in hrefs if canonical_domain(h) == host)
 
 
+# Nouns that stand in for "someone who left a review". The Pop Pie Co page used
+# "Yelp reviewers"; the prompt at the time banned only a named customer, so it
+# broke nothing. Platforms are listed by name because that is what the model
+# reached for, and it reads as more credible than an unnamed group, not less.
+# \b at both ends is load-bearing, not tidiness: "preview" contains "review",
+# and the claim bar on EVERY page generated here reads "This is a preview of
+# your ...". Without the boundaries this warns on every build, which is the
+# same as not warning at all.
+_REVIEW_SOURCE = (
+    r"\b(?:reviewers?|reviews?|testimonials?|yelp|tripadvisor|trip\s+advisor|"
+    r"google\s+(?:reviews?|ratings?)|regulars|patrons|diners|customers|"
+    r"guests|visitors|locals)\b"
+)
+# Reporting verbs: the sentence claims to know what those people SAID.
+#
+# Deliberately excludes the feeling verbs — love, adore, swear by is borderline
+# and stays out. "A spot locals love" is how every city guide on earth writes
+# and it claims no evidence; "locals say it is the best" claims evidence. That
+# line is what keeps this warning readable: fire on puffery and every build
+# warns, and a warning that always fires is one nobody reads.
+_REVIEW_REPORTING = (
+    r"\b(?:call(?:s|ed|ing)?\s+(?:it|them|the\w*)?\s*out|prais\w+|rave\w*|"
+    r"mention\w*|describ\w+|says?|said|note[sd]?|agree\w*|report\w*|"
+    r"laud\w+|singl\w+\s+out|point\w*\s+to)\b"
+)
+
+
+# A testimonials section by any name. _build_reviews_block tells the model not
+# to add one at all, so the heading is the finding: there is no real review text
+# on this build for it to have been filled from.
+_TESTIMONIAL_HEADING = (
+    r"\btestimonials?\b"
+    r"|\bwhat\s+(?:our\s+)?\w+\s+(?:are\s+)?say(?:ing)?\b"
+    r"|\bwhat\s+people\s+are\s+saying\b"
+)
+# The testimonial byline convention: "Marcus R.", "Marcus R., San Diego, CA",
+# "Sarah, La Jolla". A bare business name does not match, which is what keeps
+# the Sponsored Story's sanctioned pull quote (their OWN words) out of it.
+# The trailing guard is (?![a-zA-Z]), not \s: block ends are rewritten to ". "
+# above, so a byline arrives as "Marcus R.." and requiring whitespace or a comma
+# after the initial missed all three testimonials on the one page that has them.
+_TESTIMONIAL_BYLINE = (
+    r"[A-Z][a-z]+\s+[A-Z]\.(?![a-zA-Z])"                    # Marcus R.
+    r"|[A-Z][a-z]+\s*,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s*,\s*[A-Z]{2}\b"  # Ana, San Diego, CA
+)
+
+
+def _warn_fabricated_reviews(html: str, label: str, business_name: str) -> list:
+    """Report any invented review evidence on a finished page. Returns the hits.
+
+    Called from all three generators, before photo inlining so a base64 blob
+    cannot match and a 5 MB string is not walked sentence by sentence.
+
+    Smart Site needs this as much as the two magnets do, and arguably more: the
+    fabricated testimonials that prompted the check were found on a Smart Site
+    page in output/sites, not on a lead magnet. Three invented customers with
+    names and cities, on a page carrying a real business's branding.
+    """
+    hits = _find_attributed_review_claims(html)
+    if hits:
+        print(
+            f"  [generator] WARNING: {label} page for {business_name} reports what reviewers "
+            f"said, on a page given no review text. This is fabricated evidence on a page "
+            f"about a real business, sent to that business. Read these before it goes out:"
+        )
+        for hit in hits[:5]:
+            print(f"  [generator]   > {hit[:200]}")
+        if len(hits) > 5:
+            print(f"  [generator]   ... and {len(hits) - 5} more")
+    return hits
+
+
+def _find_attributed_review_claims(html: str) -> list:
+    """Invented review evidence on a page that was given no review text.
+
+    Every generated page is given a star rating and a count and nothing else
+    (see _build_reviews_block). So anything on the finished page claiming to
+    know what a reviewer actually SAID was invented, and this returns it.
+
+    A warning rather than a raise, matching _count_own_domain_links: this fires
+    on a whole generation and a page is still a usable mockup with one bad line
+    in it. The point is that the line gets SEEN before the page is emailed to
+    the business it invents a quote about, which is what did not happen on
+    POD01-133 — the prompt said not to, the model did it anyway, and nothing
+    between the model and the prospect's inbox looked.
+
+    Three shapes, because the fabrication takes three and the first pass here
+    only caught one:
+
+    1. A sentence naming who it is quoting. "Yelp reviewers have specifically
+       called out ..." — the POD01-133 line. Paraphrase counts: "Reviewers
+       praise the pastries" is the same claim with the punctuation removed.
+    2. A testimonials SECTION. The prompt says never build one, because there is
+       nothing real to fill it with, so the heading alone is the finding.
+    3. A quoted passage with a person's byline under it, which is how the model
+       actually builds a testimonial. Found on a page already on disk here:
+
+           "Knowing that every sip supports their carbon-negative mission ..."
+           Marcus R., San Diego, CA
+
+       Shape 1 cannot see this one. The quote and the name it is attributed to
+       sit in sibling elements, so no single sentence contains both, which is
+       exactly why this needs its own pass rather than a wider sentence regex.
+    """
+    # `\Z` as an alternative closer, because an UNCLOSED <style> is a real state
+    # here, not a hypothetical: a response that hit max_tokens gets stapled shut
+    # by _close_truncated_html, which appends </body></html> and does not close
+    # a style block. Matching only on </style> then strips nothing, and every
+    # CSS class name (.testimonial-card, .testimonials-grid) reaches the scan as
+    # if it were page copy. Measured on the pages in output/sites: 8 to 13
+    # "findings" per page, all of them stylesheet.
+    text = re.sub(r"(?is)<(script|style)\b[^>]*>.*?(?:</\1\s*>|\Z)", " ", html)
+    # A closing block tag ends a sentence. Without this the page collapses into
+    # a handful of enormous pseudo-sentences (a nav strip, a whole section) that
+    # the length guard below then skips, so a real fabricated quote sitting in
+    # the same <section> as a card grid is never even examined. It also decides
+    # what the warning PRINTS: the offending sentence, not 400 characters of
+    # surrounding menu text.
+    text = re.sub(
+        r"(?i)</(p|div|section|article|h[1-6]|li|td|th|blockquote|figcaption|"
+        r"span|em|strong|cite)\s*>",
+        ". ",
+        text,
+    )
+    text = re.sub(r"(?i)<br\s*/?>", ". ", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    for entity, char in (
+        ("&quot;", '"'), ("&ldquo;", '"'), ("&rdquo;", '"'),
+        ("&#34;", '"'), ("&#39;", "'"), ("&rsquo;", "'"), ("&amp;", "&"),
+    ):
+        text = text.replace(entity, char)
+    text = re.sub(r"\s+", " ", text)
+
+    hits = []
+
+    # 1. Sentences that report what someone said.
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        if len(sentence) > 400:
+            continue
+        if not re.search(_REVIEW_SOURCE, sentence, re.IGNORECASE):
+            continue
+        quoted = re.search(r"[\"“”'‘’]", sentence) is not None
+        reporting = re.search(_REVIEW_REPORTING, sentence, re.IGNORECASE) is not None
+
+        if quoted or reporting:
+            hits.append(sentence.strip())
+
+    # 2. A testimonials section, by heading. "What Our Guests Say" is the same
+    #    section wearing an editorial hat, so match the phrasing too.
+    #
+    #    One report per section: the real page reads "Testimonials. What
+    #    Adventurers Say." and matches twice, three words apart, for what is one
+    #    finding. Skip a match that lands inside the window already reported.
+    reported_to = -1
+    for match in re.finditer(_TESTIMONIAL_HEADING, text, re.IGNORECASE):
+        if match.start() < reported_to:
+            continue
+        reported_to = match.start() + 160
+        hits.append(f"[testimonials section] {text[match.start():reported_to].strip()}")
+
+    # 3. A quoted passage with a person's byline under it.
+    #
+    #    The byline pattern is deliberately the testimonial convention and not
+    #    "any capitalised word": a first name plus a surname initial ("Marcus
+    #    R."), or a name followed by a city and state. A business name alone
+    #    does not match, which keeps the sanctioned pull quote (the business's
+    #    OWN words, which the Sponsored Story prompt asks for) out of the
+    #    results.
+    for match in re.finditer(r"[\"“]([^\"“”]{40,400})[\"”]", text):
+        following = text[match.end():match.end() + 120]
+        if re.search(_TESTIMONIAL_BYLINE, following):
+            quote = match.group(1).strip()
+            # The block-tag rewrite leaves ". . ." runs between the card's
+            # sibling elements. Collapse them so the warning reads as a name.
+            byline = re.sub(r"^[\s.,-]+", "", following)
+            byline = re.sub(r"(?:\.\s*){2,}", ". ", byline).strip(" ,")
+            # 120, not the full quote: the caller prints 200 characters per hit
+            # and the NAME is the half that proves it was fabricated, so it must
+            # survive the truncation.
+            hits.append(f'"{quote[:120]}..." attributed to "{byline[:50].strip(" ,")}"')
+
+    # A page can trip more than one shape on the same testimonial (the section
+    # heading AND the byline under it). Dedupe on the text so the warning lists
+    # findings, not the same finding twice.
+    seen, unique = set(), []
+    for hit in hits:
+        if hit not in seen:
+            seen.add(hit)
+            unique.append(hit)
+    return unique
+
+
 def build_offer_page_site(
     offer: str,
     intel: dict,
@@ -1322,7 +1582,8 @@ def build_offer_page_site(
     print(f"  [generator] Generating {offer} mockup for {intel['business_name']}...")
 
     html = generate_offer_lead_magnet_page(
-        offer, intel, vertical=vertical, meter=meter, photo_assets=photo_assets
+        offer, intel, vertical=vertical, meter=meter, photo_assets=photo_assets,
+        prospect_id=prospect_id,
     )
 
     widget_html = _build_chat_widget(intel)
@@ -1391,7 +1652,8 @@ def generate_multi_page_site(
         # One shared meter across every worker thread — CostMeter.record takes
         # a lock precisely so this fan-out can bill into it concurrently.
         html = generate_page(intel, design, page, pages_plan, notes, r6,
-                             meter=meter, photo_assets=photo_assets)
+                             meter=meter, photo_assets=photo_assets,
+                             prospect_id=prospect_id)
         html = _inject_base_href(html, prospect_id)
         html = _fix_absolute_page_links(html, pages_plan)
         if "</body>" in html:
