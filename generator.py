@@ -579,9 +579,11 @@ Build a single-file HTML homepage (index.html).
 
 5. SERVICES/MENU — 3 feature cards using their REAL services
 
-6. TESTIMONIALS — ONLY the review quotes provided above, verbatim.
-   If none were provided, OMIT this section. Never invent a quote, a customer
-   name, or a star rating.
+6. NO TESTIMONIALS SECTION. You were given no review text, so there is nothing
+   real to build one from. Do not add one, under any heading: not "Testimonials",
+   not "What Our Customers Say", not a quote carousel, not a single quoted card.
+   See the REVIEWS rule above. The rating and review count, if you were given
+   them, belong in the SOCIAL PROOF BAR as bare numbers and nowhere else.
 
 7. PRESS / AS SEEN IN — if press mentions provided, show source logos as text badges.
    Skip this section entirely if no press.
@@ -804,7 +806,9 @@ def generate_page(
 
 5. SERVICES/MENU — 3 feature cards using their REAL services
 
-6. TESTIMONIALS — ONLY the review quotes provided above, verbatim. If none, OMIT.
+6. NO TESTIMONIALS SECTION. You were given no review text, so there is nothing
+   real to build one from. Do not add one, under any heading. See the REVIEWS
+   rule above. The rating and count, if given, are bare numbers in SOCIAL PROOF.
 
 7. PRESS / AS SEEN IN — if press mentions provided, show as text badges. Skip if none.
 

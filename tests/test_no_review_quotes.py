@@ -77,3 +77,70 @@ def test_press_search_is_budget_guarded():
     the build past the caller's 135s ceiling."""
     assert intel.INTEL_BUDGET_SECONDS <= 45
     assert "INTEL_BUDGET_SECONDS" in _code_of(intel.scrape_site)
+
+
+# ── the prompt, not just the code ───────────────────────────────────────────
+# The tests above pin the deleted quotes branch in _build_reviews_block. They do
+# not look at what the PROMPT asks for, and that is the gap that mattered: while
+# the code supplied no quotes, both Smart Site prompts still carried
+#
+#   "6. TESTIMONIALS — ONLY the review quotes provided above, verbatim."
+#
+# asking the model to build a section from a source that structurally does not
+# exist. output/sites/misadventure/index.html is the result: a Smart Site build
+# (its claim bar reads "Claim This Site") carrying three invented customers with
+# names and cities. The instruction survived every review of the review-quote
+# guard because nothing ever asserted on the rendered prompt.
+
+def _rendered_prompts():
+    """Every prompt the three generators actually send, with a fake client."""
+    import sys
+
+    sys.path.insert(0, "tests")
+    from test_generate_page import _rich_intel, _nav_plan, _mock_client
+    import tempfile
+
+    captured = []
+    real_client, real_dir = generator._get_client, generator.SITES_DIR
+    generator._get_client = lambda **k: _mock_client(captured)
+    generator.SITES_DIR = tempfile.mkdtemp()
+    try:
+        generator.generate_site(_rich_intel(), "acme-com")
+        generator.generate_page(
+            _rich_intel(), generator._get_design_personality("other"),
+            _nav_plan()[0], _nav_plan(),
+        )
+        generator.generate_offer_lead_magnet_page("get_listed", _rich_intel())
+        generator.generate_offer_lead_magnet_page("sponsored_story", _rich_intel())
+    finally:
+        generator._get_client, generator.SITES_DIR = real_client, real_dir
+    # Without this, a capture helper that silently stops working turns all three
+    # tests below into empty loops that pass while checking nothing — the same
+    # class of dead guard this section exists to prevent.
+    assert len(captured) == 4, f"expected 4 prompts, captured {len(captured)}"
+    return [str(c) for c in captured]
+
+
+def test_no_prompt_asks_for_a_testimonials_section():
+    """All three generators, not just the two lead magnets. The Smart Site path
+    is the one with a confirmed real fabrication behind it."""
+    for prompt in _rendered_prompts():
+        assert "TESTIMONIALS — ONLY" not in prompt
+        assert "review quotes provided above" not in prompt
+
+
+def test_every_prompt_carries_the_no_review_text_rule():
+    """A prompt that drops the rule is a prompt that can invent a reviewer."""
+    for prompt in _rendered_prompts():
+        assert "YOU WERE GIVEN NO REVIEW TEXT" in prompt
+
+
+def test_no_prompt_contradicts_itself_about_testimonials():
+    """The real defect was not a missing rule, it was two instructions pulling
+    opposite ways in one prompt: the reviews block forbidding quoted customers
+    while a numbered structure item asked for a Testimonials section. Either
+    both are absent or the prompt is telling the model to do the thing it just
+    banned."""
+    for prompt in _rendered_prompts():
+        if "YOU WERE GIVEN NO REVIEW TEXT" in prompt:
+            assert "TESTIMONIALS — ONLY" not in prompt
