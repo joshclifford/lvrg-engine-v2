@@ -784,6 +784,28 @@ _TEMPLATE_TITLE_RE = re.compile(
 )
 
 
+def _headline_names_the_business(headline: str, name: str) -> bool:
+    """Does the headline already say who this is about, in full or in short?
+
+    A whole-string test is too strict, and it shipped: "Prager Brothers Artisan
+    Breads" against a headline reading "Inside Carlsbad's Slow-Rise Obsession:
+    How Prager Brothers Turned Bread Into a Daily Ritual" is plainly the same
+    bakery, named the way a person says it. The strict test said no and the
+    title came out as the registered name, a colon, the headline, and its own
+    second colon, with "Prager Brothers" in it twice.
+
+    Two words is the shortest form that still identifies a business: "Prager
+    Brothers" and "Dark Horse" do, "Su" and "The" do not. A one-word name has no
+    short form, so it must appear in full.
+    """
+    words = name.lower().split()
+    if not words:
+        return True
+    if name.lower() in headline.lower():
+        return True
+    return len(words) >= 2 and " ".join(words[:2]) in headline.lower()
+
+
 def _editorial_title(html: str, intel: dict) -> str:
     """A real title for this page, or "" to leave the model's own alone.
 
@@ -806,7 +828,7 @@ def _editorial_title(html: str, intel: dict) -> str:
         return ""
 
     name = (intel.get("business_name") or "").strip()
-    if name and name.lower() not in headline.lower():
+    if not _headline_names_the_business(headline, name):
         headline = f"{name}: {headline}"
     return f"{headline} | {PUBLISHER_NAME}"
 

@@ -317,3 +317,35 @@ def test_get_listed_keeps_its_own_title(monkeypatch):
     html = _build(monkeypatch, offer="get_listed", html=page)
 
     assert "<title>Dark Horse Coffee Roasters | Listing Preview</title>" in html
+def test_a_headline_naming_the_business_in_short_is_not_prefixed(monkeypatch):
+    """Prager Brothers shipped as "Prager Brothers Artisan Breads: Inside
+    Carlsbad's Slow-Rise Obsession: How Prager Brothers Turned Bread Into a Daily
+    Ritual | There San Diego" — the name twice and two colons — because the
+    headline carried the short form and the check wanted the registered one."""
+    page = _titled(None, "<title>Sponsored Story Preview</title>").replace(
+        "<h1>Dark Horse Coffee Roasters: A Normal Heights Institution</h1>",
+        "<h1>Inside the Slow-Rise Obsession: How Dark Horse Turned Coffee Into a Ritual</h1>",
+    )
+    html = _build(monkeypatch, html=page)
+    title = re.search(r"<title>(.*?)</title>", html, re.DOTALL).group(1)
+
+    assert title.startswith("Inside the Slow-Rise Obsession")
+    assert title.count(":") == 1
+    assert title.lower().count("dark horse") == 1
+
+
+def test_a_one_word_name_has_no_short_form_and_must_appear_in_full(monkeypatch):
+    """Two words identify a business. One word of a one-word name is the whole
+    thing, and half of it identifies nothing."""
+    assert generator._headline_names_the_business("A Day at Schmackary's", "Schmackary's")
+    assert not generator._headline_names_the_business("A Day at the Bakery", "Schmackary's")
+
+
+def test_the_first_two_words_have_to_be_the_ones_that_match():
+    """"Bakery" appearing somewhere is not the business being named."""
+    assert not generator._headline_names_the_business(
+        "The Bakery Everyone in City Heights Talks About", "Su Pan Bakery"
+    )
+    assert generator._headline_names_the_business(
+        "How Su Pan Became a City Heights Fixture", "Su Pan Bakery"
+    )
