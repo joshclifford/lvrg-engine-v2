@@ -676,10 +676,15 @@ def _json_ld_article(
         "name": intel.get("business_name") or "",
         "url": f"https://{intel['domain']}" if intel.get("domain") else "",
         "telephone": intel.get("phone") or "",
-        # areaServed, not address: the scrape carries a city and a neighborhood,
-        # never a street address, and a PostalAddress built out of "San Diego, CA"
-        # would be a structured claim we cannot support.
-        "areaServed": intel.get("location") or "",
+        # `location` is whatever the scrape found: "5006 El Cajon Blvd, San Diego,
+        # CA 92115" on one lead and "San Diego, CA" on the next. Both are an
+        # address, coarse or exact, so both belong here. It was areaServed until
+        # a real build put a street address in it, which reads as the area the
+        # bakery serves rather than where it is. Plain text, not a PostalAddress:
+        # splitting a one-line string into street/locality/postcode means guessing
+        # at the parts, and a wrong structured field is worse than an honest flat
+        # one.
+        "address": intel.get("location") or "",
     }
     article = {
         "@context": "https://schema.org",

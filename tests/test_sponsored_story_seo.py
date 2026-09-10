@@ -179,6 +179,7 @@ def test_the_structured_data_describes_the_article_and_the_business(monkeypatch)
     assert business["name"] == "Dark Horse Coffee Roasters"
     assert business["url"] == "https://darkhorsecoffeeroasters.com"
     assert business["telephone"] == "555-1234"
+    assert business["address"] == "San Diego, CA"
 
 
 def test_the_structured_data_carries_no_empty_or_invented_fields(monkeypatch):
@@ -188,7 +189,7 @@ def test_the_structured_data_carries_no_empty_or_invented_fields(monkeypatch):
     data = _json_ld(_build(monkeypatch, intel=intel))
 
     assert "telephone" not in data["about"]
-    assert "areaServed" not in data["about"]
+    assert "address" not in data["about"]
     assert all(v not in ("", None, {}, []) for v in data.values())
 
 
