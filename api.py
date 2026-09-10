@@ -205,6 +205,12 @@ class BuildRequest(BaseModel):
     # unrecognised degrades to the generator's generic framing rather than
     # failing the build, so an unknown business_type is never fatal.
     vertical: str = ""
+    # Public base of the preview URL, from leadscraper's SMART_SITE_PUBLIC_BASE.
+    # Only used to build the canonical/og:url on a Sponsored Story. Passed per
+    # build rather than configured twice: the one time this value was held in
+    # two places the second copy went stale and every emailed preview link
+    # pointed at a host that only redirected (docs/06-qa/known-issues.md).
+    public_base: str = ""
 
 
 class ChatRequest(BaseModel):
@@ -271,7 +277,7 @@ OFFER_PAGE_OFFERS = {
 }
 
 
-async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "", page_url: str = "", multi_page: bool = False, variant: str = "", vertical: str = "") -> AsyncGenerator[str, None]:
+async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "", page_url: str = "", multi_page: bool = False, variant: str = "", vertical: str = "", public_base: str = "") -> AsyncGenerator[str, None]:
     """Run the full engine pipeline, yielding SSE events."""
 
     loop = asyncio.get_event_loop()
@@ -424,7 +430,8 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
             paths = None
             site_dir_local = build_offer_page_site(offer_key, intel, prospect_id,
                                                    vertical=vertical or None,
-                                                   meter=meter, photo_assets=photo_assets)
+                                                   meter=meter, photo_assets=photo_assets,
+                                                   public_base=public_base)
         elif multi_page:
             paths = generate_multi_page_site(intel, prospect_id, pages_plan, notes, r6,
                                              meter=meter, photo_assets=photo_assets)
@@ -742,10 +749,14 @@ async def build(req: BuildRequest):
     # new business_type upstream must not start failing builds.
     vertical = (req.vertical or "").strip()[:64]
 
+    # Trimmed only, never validated against a list: this is our own app's
+    # configured host, and preview_page_url drops it entirely when absent.
+    public_base = (req.public_base or "").strip()[:200]
+
     return StreamingResponse(
         run_pipeline(domain, req.no_deploy, req.offer, req.cta, req.notes, req.known, req.r6,
                      req.lead_id, req.callback_url, req.callback_secret, page_url, req.multi_page,
-                     variant, vertical),
+                     variant, vertical, public_base),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -47,6 +47,19 @@ def build_booking_url(offer: str, prospect_id: str = "") -> str:
     return f"{BOOKING_URL}?{params}"
 
 
+# The publication a Sponsored Story runs on. Used as the author/publisher in
+# the page's structured data and as og:site_name, so it has to read the way the
+# brand is written, not the way the domain is spelled.
+PUBLISHER_NAME = "There San Diego"
+
+# Public base for a preview URL, used to build the canonical/og:url on a
+# Sponsored Story. leadscraper holds the authoritative value in
+# SMART_SITE_PUBLIC_BASE and passes it per build; this is the fallback for
+# callers with no app to ask (run_engine.py, smoke runs). Empty means the page
+# ships with no canonical tag, which is correct: a canonical naming the wrong
+# host is worse than none.
+PREVIEW_PUBLIC_BASE = os.environ.get("PREVIEW_PUBLIC_BASE", "")
+
 # GitHub Pages base URL for deployed previews
 GITHUB_USER = "joshclifford"
 GITHUB_REPO = "lvrg-previews"

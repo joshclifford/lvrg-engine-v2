@@ -13,12 +13,15 @@ import concurrent.futures
 import os
 import re
 import json
+from datetime import date
+from html import escape, unescape
 from typing import Optional
 import anthropic
 
 import cost
 from claude_text import first_text
-from config import SITES_DIR, BOOKING_URL, build_booking_url, SENDER_NAME, SENDER_AGENCY
+from config import (SITES_DIR, BOOKING_URL, build_booking_url, SENDER_NAME, SENDER_AGENCY,
+                    PUBLISHER_NAME, PREVIEW_PUBLIC_BASE)
 # One definition of "the same host", shared with the slug builder. Comparing
 # raw href strings would miss www. and a trailing slash.
 from slug import canonical_domain
@@ -555,6 +558,213 @@ def _attribute_booking_links(html: str, booking_url: str, label: str) -> str:
             f"link(s); rewritten to the attributed URL (POD01-130)."
         )
     return html
+
+
+# ── What a Sponsored Story is sold as (POD01-126) ────────────────────────────
+#
+# A Sponsored Story is sold as a real published article: something a search
+# engine can read, and something that renders as a proper card with a picture
+# when There San Diego promotes it on Facebook or Instagram. The generated page
+# had a real editorial <title> and nothing else — no description, no Open Graph,
+# no canonical, no structured data — so the story shared as a bare link with no
+# image and no summary, on the one channel the offer is sold on.
+#
+# Stamped on in code rather than asked for in the prompt. Six head tags asked
+# for is six chances to lose one silently, and that is not hypothetical: the
+# booking links were asked for and came back bare on a live page the same week
+# (POD01-130). Everything below is read out of the page the model already wrote
+# or out of real intel, so nothing here is invented.
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+# Short enough to survive a search result without being cut, which is the whole
+# job of a meta description.
+_META_DESCRIPTION_CHARS = 155
+
+# A paragraph long enough to be the story rather than the claim bar. The first
+# <p> in the document is "This is a preview of your Sponsored Story", which
+# describes the mockup and says nothing about the business.
+_STORY_PARAGRAPH_CHARS = 80
+
+
+def _visible_text(fragment: str) -> str:
+    """Markup out, entities decoded, whitespace collapsed to single spaces."""
+    return unescape(" ".join(_TAG_RE.sub(" ", fragment).split()))
+
+
+def _first_tag_text(html: str, tag: str) -> str:
+    """The visible text of the first <tag> in the document, or ""."""
+    match = re.search(rf"<{tag}\b[^>]*>(.*?)</{tag}>", html, re.IGNORECASE | re.DOTALL)
+    return _visible_text(match.group(1)) if match else ""
+
+
+def _meta_description(html: str, intel: dict) -> str:
+    """One real sentence about the business, cut to fit a search result.
+
+    The story's own opening paragraph, which the model wrote from their real
+    description and services. Falling back to the scraped description, and to
+    nothing at all rather than to filler: an invented summary on a page sold as
+    editorial is the same failure _warn_fabricated_reviews exists to catch.
+
+    Cut on a word boundary. A description sliced mid-word reads as broken, and
+    Google shows it exactly as given.
+    """
+    paragraphs = [
+        _visible_text(p)
+        for p in re.findall(r"<p\b[^>]*>(.*?)</p>", html, re.IGNORECASE | re.DOTALL)
+    ]
+    source = next(
+        (p for p in paragraphs if len(p) >= _STORY_PARAGRAPH_CHARS),
+        (intel.get("description") or "").strip(),
+    )
+    if not source:
+        return ""
+    if len(source) <= _META_DESCRIPTION_CHARS:
+        return source
+    return source[:_META_DESCRIPTION_CHARS].rsplit(" ", 1)[0].rstrip(" ,;:.") + "…"
+
+
+def _first_remote_image(html: str) -> str:
+    """The first <img> that still points at a real address.
+
+    Read BEFORE _inline_photo_assets. After it the same src is a data: URI, and
+    a social crawler cannot fetch bytes embedded in a page it has not parsed —
+    og:image has to be somewhere Facebook can go and GET.
+    """
+    match = re.search(
+        r"""<img\b[^>]*\bsrc\s*=\s*["'](https?://[^"']+)["']""", html, re.IGNORECASE
+    )
+    return match.group(1) if match else ""
+
+
+def preview_page_url(public_base: str, prospect_id: str) -> str:
+    """The page's own public address, or "" when the caller did not say.
+
+    Returns empty rather than guessing. A canonical tag naming the wrong URL is
+    worse than no canonical tag: it tells a crawler the real page is somewhere
+    else, and the somewhere else is a 404. leadscraper holds this value in
+    SMART_SITE_PUBLIC_BASE and passes it in; PREVIEW_PUBLIC_BASE is the fallback
+    for run_engine.py and smoke runs, which have no app to ask.
+
+    It is deliberately NOT derived from PREVIEW_BASE_URL. That is the GitHub
+    Pages address the deploy writes to, and the whole point of the proxy in
+    leadscraper is that a prospect never sees it (api/preview/index.ts).
+    """
+    base = (public_base or PREVIEW_PUBLIC_BASE or "").strip().rstrip("/")
+    if not base or not prospect_id:
+        return ""
+    return f"{base}/preview/{prospect_id}"
+
+
+def _json_ld_article(
+    headline: str, description: str, canonical_url: str, image_url: str,
+    published: str, intel: dict,
+) -> str:
+    """schema.org Article for the story, with the business as its subject.
+
+    The prospect is paying for a real article on a real publication, and this is
+    the machine-readable half of that claim. Every field is dropped when the
+    real value is missing rather than filled with a placeholder — a NewsArticle
+    claiming an author nobody wrote is the structured-data version of a
+    fabricated review.
+
+    Article, not NewsArticle: NewsArticle carries an expectation of reporting,
+    and this is a commissioned feature.
+    """
+    business = {
+        "@type": "LocalBusiness",
+        "name": intel.get("business_name") or "",
+        "url": f"https://{intel['domain']}" if intel.get("domain") else "",
+        "telephone": intel.get("phone") or "",
+        # areaServed, not address: the scrape carries a city and a neighborhood,
+        # never a street address, and a PostalAddress built out of "San Diego, CA"
+        # would be a structured claim we cannot support.
+        "areaServed": intel.get("location") or "",
+    }
+    article = {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": headline,
+        "description": description,
+        "image": image_url,
+        "datePublished": published,
+        "mainEntityOfPage": canonical_url,
+        "author": {"@type": "Organization", "name": PUBLISHER_NAME},
+        "publisher": {"@type": "Organization", "name": PUBLISHER_NAME},
+        "about": {k: v for k, v in business.items() if v},
+    }
+    article = {k: v for k, v in article.items() if v}
+
+    # "</" cannot appear inside a script element, and a business name is scraped
+    # text we do not control. json.dumps escapes quotes; it does not escape this.
+    return json.dumps(article, ensure_ascii=False, indent=2).replace("</", "<\\/")
+
+
+def _seo_head_tags(html: str, intel: dict, canonical_url: str, image_url: str) -> str:
+    """The head tags a Sponsored Story is sold on, built from the page itself."""
+    headline = _first_tag_text(html, "h1") or _first_tag_text(html, "title")
+    description = _meta_description(html, intel)
+    published = date.today().isoformat()
+
+    tags = []
+    if description:
+        tags.append(f'<meta name="description" content="{escape(description, quote=True)}">')
+    if canonical_url:
+        tags.append(f'<link rel="canonical" href="{escape(canonical_url, quote=True)}">')
+
+    open_graph = [
+        ("og:type", "article"),
+        ("og:site_name", PUBLISHER_NAME),
+        ("og:title", headline),
+        ("og:description", description),
+        ("og:url", canonical_url),
+        ("og:image", image_url),
+    ]
+    for prop, value in open_graph:
+        if value:
+            tags.append(f'<meta property="{prop}" content="{escape(value, quote=True)}">')
+
+    # Mirrors Open Graph rather than saying anything new. X reads og:* as a
+    # fallback, but LinkedIn and Slack read the twitter:* pair first, and the
+    # cost of writing both is four lines.
+    twitter = [
+        ("twitter:card", "summary_large_image" if image_url else "summary"),
+        ("twitter:title", headline),
+        ("twitter:description", description),
+        ("twitter:image", image_url),
+    ]
+    for name, value in twitter:
+        if value:
+            tags.append(f'<meta name="{name}" content="{escape(value, quote=True)}">')
+
+    if headline:
+        tags.append(
+            '<script type="application/ld+json">\n'
+            + _json_ld_article(headline, description, canonical_url, image_url, published, intel)
+            + "\n</script>"
+        )
+
+    return "\n  ".join(tags)
+
+
+def _inject_head_tags(html: str, tags: str) -> str:
+    """Put the tags inside <head>, or build a head when the model wrote none.
+
+    Before </head> rather than after <head>, so the model's own <title> stays
+    the first thing in the document and _inject_base_href's <base> keeps sitting
+    where it puts itself.
+    """
+    if not tags:
+        return html
+    block = "  " + tags + "\n"
+    if "</head>" in html:
+        return html.replace("</head>", block + "</head>", 1)
+    if "<head>" in html:
+        return html.replace("<head>", "<head>\n" + block, 1)
+    # No head at all: _close_truncated_html guarantees a </body></html>, not a
+    # head, and a page truncated before <head> still deserves its canonical.
+    return re.sub(r"(<html\b[^>]*>)", r"\1\n<head>\n" + block.rstrip("\n") + "\n</head>",
+                  html, count=1, flags=re.IGNORECASE)
 
 
 def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[dict] = None,
@@ -1121,6 +1331,7 @@ def generate_offer_lead_magnet_page(
     meter=None,
     photo_assets: Optional[dict] = None,
     prospect_id: str = "",
+    public_base: str = "",
 ) -> str:
     """Generate a single-page mockup for the Get Listed or Sponsored Story
     lead magnet. `offer` is "get_listed" or "sponsored_story". `vertical`
@@ -1404,7 +1615,22 @@ Start with <!DOCTYPE html>"""
 
     _warn_fabricated_reviews(html, offer, intel.get("business_name", ""))
 
+    # Read before inlining. After it this src is a data: URI, and og:image has
+    # to be an address a crawler can go and fetch.
+    hero_image = _first_remote_image(html)
+
     html = _inline_photo_assets(html, photo_assets)
+
+    # The article half of what a Sponsored Story is sold as (POD01-126). Get
+    # Listed is a directory profile rather than a published article and its own
+    # ticket asks for none of this, so it stays a single-offer concern until
+    # someone decides otherwise.
+    if offer == "sponsored_story":
+        html = _inject_head_tags(html, _seo_head_tags(
+            html, intel,
+            canonical_url=preview_page_url(public_base, prospect_id),
+            image_url=hero_image,
+        ))
 
     # The proxy in leadscraper (api/preview/index.ts) refuses anything over
     # 5 MB with a 502, and the prospect gets a blank "Preview unavailable" while
@@ -1705,6 +1931,7 @@ def build_offer_page_site(
     vertical: Optional[str] = None,
     meter=None,
     photo_assets: Optional[dict] = None,
+    public_base: str = "",
 ) -> str:
     """Generate ONE offer mockup, inject the chat widget, write it to disk, and
     return the folder path.
@@ -1723,7 +1950,7 @@ def build_offer_page_site(
 
     html = generate_offer_lead_magnet_page(
         offer, intel, vertical=vertical, meter=meter, photo_assets=photo_assets,
-        prospect_id=prospect_id,
+        prospect_id=prospect_id, public_base=public_base,
     )
 
     widget_html = _build_chat_widget(intel)
