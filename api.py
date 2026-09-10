@@ -277,6 +277,46 @@ OFFER_PAGE_OFFERS = {
 }
 
 
+# Bytes on the wire while a long step runs.
+#
+# Every slow step here is one `await run_in_executor(...)` that produces no
+# output of its own. The intel step is the worst: scrape, Playwright re-render,
+# Claude extraction, photo download and press search all sit inside a single
+# await. On a fast lead that is two seconds. On panchitasbakery.com it was
+# thirty-six, and the connection died inside that window — leadscraper logged
+# "error reading a body from connection" while the engine was two seconds into
+# generation, and the build was lost (10 Sep 2026).
+#
+# A keepalive is not a proof against that: a Su Pan build sat silent for fifty
+# seconds through generation the same morning and survived, so silence is not a
+# clean threshold and something flakier is going on underneath. This is the
+# cheap half of the answer — an SSE comment every few seconds, ignored by every
+# client, fifteen bytes, and it removes "nothing was on the wire" as a possible
+# cause. It also surfaces a dead client sooner, since a yield is what raises
+# GeneratorExit.
+_SSE_HEARTBEAT_SECONDS = float(os.environ.get("SSE_HEARTBEAT_SECONDS", "10"))
+
+# A comment line. The SSE spec says a line starting ":" is ignored, so no client
+# has to know this exists, and leadscraper's reader drops it as an unparsable
+# non-"data:" line the same way.
+_SSE_KEEPALIVE = ": keepalive\n\n"
+
+
+async def _heartbeat_until(task, interval: float = _SSE_HEARTBEAT_SECONDS):
+    """Yield a keepalive every `interval` seconds until `task` finishes.
+
+    Never touches the task. It is not awaited, cancelled or inspected here, so
+    the caller keeps its result, its exceptions and the cancellation semantics
+    _build_and_report depends on. Wrapping a step changes the bytes on the wire
+    and nothing else.
+    """
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=interval)
+        if done:
+            return
+        yield _SSE_KEEPALIVE
+
+
 async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes: str = "", known: dict = None, r6: Optional[dict] = None, lead_id: str = "", callback_url: str = "", callback_secret: str = "", page_url: str = "", multi_page: bool = False, variant: str = "", vertical: str = "", public_base: str = "") -> AsyncGenerator[str, None]:
     """Run the full engine pipeline, yielding SSE events."""
 
@@ -500,9 +540,12 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         # lambda, not positional args: run_in_executor cannot forward kwargs,
         # and `meter` has to arrive as one so every other caller of scrape_site
         # (lm-tool, run_engine.py, the tests) keeps its existing signature.
-        intel = await loop.run_in_executor(
+        intel_task = loop.run_in_executor(
             None, lambda: scrape_site(domain, page_url, meter=meter)
         )
+        async for beat in _heartbeat_until(intel_task):
+            yield beat
+        intel = await intel_task
         # The lead's OWN page, kept for the generator to link to.
         #
         # scrape_site takes page_url and then throws it away, so the only URL
@@ -581,7 +624,10 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
         # or deploy was what it was waiting on — cannot cause a site that
         # finishes after it left to go unreported. See _build_and_report's
         # docstring for the incident this closes.
-        preview_url, site_paths = await loop.run_in_executor(None, _build_and_report, prospect_id)
+        build_task = loop.run_in_executor(None, _build_and_report, prospect_id)
+        async for beat in _heartbeat_until(build_task):
+            yield beat
+        preview_url, site_paths = await build_task
         # Reaching this line means generation succeeded — an exception from
         # inside _build_and_report's generation half would have skipped past
         # it to the `except` below. Kept as its own log line (rather than
@@ -599,9 +645,12 @@ async def run_pipeline(domain: str, no_deploy: bool, offer: str, cta: str, notes
 
         # ── Step 5: Generate email ───────────────────────────────────
         yield sse("log", text="Writing outreach messaging...", level="info")
-        email_data = await loop.run_in_executor(
+        email_task = loop.run_in_executor(
             None, lambda: generate_email(intel, grade, prospect_id, r6, meter=meter)
         )
+        async for beat in _heartbeat_until(email_task):
+            yield beat
+        email_data = await email_task
         yield sse("log", text="Messaging ready", level="success")
 
         # ── Step 6: Save to Supabase (skip on no_deploy / smoke test runs) ──

@@ -241,3 +241,79 @@ def test_a_page_the_model_wrote_without_a_head_still_gets_one(monkeypatch):
     assert html.count("<head>") == 1
     assert 'rel="canonical"' in html
     assert html.index("<head>") < html.index("<body>")
+# ─── The <title> ─────────────────────────────────────────────────────────────
+#
+# The last SEO element left to the model, and it drifted on the second real page
+# out. Bonjour Patisserie shipped "Bonjour Patisserie | A Sponsored Story
+# Preview" while its own <h1> read "Inside the Little Italy Patisserie Turning
+# San Diego Onto French Pastry". Su Pan, same code, minutes earlier, wrote a good
+# one. The title is what Google prints.
+
+
+def _titled(html_body, title):
+    return ARTICLE.replace(
+        "<title>Dark Horse Coffee Roasters: A Normal Heights Institution | There San Diego</title>",
+        title,
+    ) if html_body is None else html_body
+
+
+def test_a_label_instead_of_a_headline_is_replaced(monkeypatch):
+    page = _titled(None, "<title>Dark Horse Coffee Roasters | A Sponsored Story Preview</title>")
+    html = _build(monkeypatch, html=page)
+
+    assert "<title>Dark Horse Coffee Roasters: A Normal Heights Institution | There San Diego</title>" in html
+    assert "Sponsored Story Preview" not in html
+
+
+def test_a_title_the_model_got_right_is_left_alone(monkeypatch):
+    """Su Pan's own title beat anything assembled mechanically. Replacing every
+    title for consistency would trade a good one for a predictable one."""
+    good = "<title>Dark Horse Coffee Roasters: Roasting Small Batches Since 2012</title>"
+    html = _build(monkeypatch, html=_titled(None, good))
+
+    assert good in html
+
+
+def test_a_headline_that_already_names_the_business_is_not_prefixed_twice(monkeypatch):
+    page = _titled(None, "<title>Preview</title>")
+    html = _build(monkeypatch, html=page)
+    title = re.search(r"<title>(.*?)</title>", html, re.DOTALL).group(1)
+
+    assert title.count("Dark Horse Coffee Roasters") == 1
+
+
+def test_a_headline_missing_the_business_name_gets_it(monkeypatch):
+    page = _titled(None, "<title>Sponsored Story Preview</title>").replace(
+        "<h1>Dark Horse Coffee Roasters: A Normal Heights Institution</h1>",
+        "<h1>Inside the Roastery Quietly Supplying Half the Neighborhood</h1>",
+    )
+    html = _build(monkeypatch, html=page)
+    title = re.search(r"<title>(.*?)</title>", html, re.DOTALL).group(1)
+
+    assert title.startswith("Dark Horse Coffee Roasters: Inside the Roastery")
+    assert title.endswith("| There San Diego")
+
+
+def test_no_headline_means_the_title_is_left_as_it_is(monkeypatch):
+    """Nothing to build a real title out of. A bad title beats an invented one,
+    and og:title falls back to the same place."""
+    page = _titled(None, "<title>Preview</title>")
+    page = re.sub(r"<h1\b.*?</h1>", "", page, flags=re.DOTALL)
+    html = _build(monkeypatch, html=page)
+
+    assert "<title>Preview</title>" in html
+
+
+def test_a_page_with_no_title_at_all_is_given_one(monkeypatch):
+    page = _titled(None, "")
+    html = _build(monkeypatch, html=page)
+
+    assert html.count("<title>") == 1
+    assert "A Normal Heights Institution" in re.search(r"<title>(.*?)</title>", html, re.DOTALL).group(1)
+
+
+def test_get_listed_keeps_its_own_title(monkeypatch):
+    page = _titled(None, "<title>Dark Horse Coffee Roasters | Listing Preview</title>")
+    html = _build(monkeypatch, offer="get_listed", html=page)
+
+    assert "<title>Dark Horse Coffee Roasters | Listing Preview</title>" in html

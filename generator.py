@@ -772,6 +772,58 @@ def _inject_head_tags(html: str, tags: str) -> str:
                   html, count=1, flags=re.IGNORECASE)
 
 
+# Words a model reaches for when it stops writing a headline and starts writing
+# a label. "Bonjour Patisserie | A Sponsored Story Preview" shipped on a live
+# page whose own <h1> read "Inside the Little Italy Patisserie Turning San Diego
+# Onto French Pastry"; Su Pan, built on the same code minutes earlier, got it
+# right. The title is the line Google prints, so a generic one loses the search
+# result the offer is sold on.
+_TEMPLATE_TITLE_RE = re.compile(
+    r"\b(preview|mock[- ]?up|template|untitled|sponsored story|lead magnet)\b",
+    re.IGNORECASE,
+)
+
+
+def _editorial_title(html: str, intel: dict) -> str:
+    """A real title for this page, or "" to leave the model's own alone.
+
+    Only replaces a title that reads as a label. Su Pan's "Su Pan Bakery: The
+    City Heights Bakery Keeping Tradition Fresh" beats anything assembled
+    mechanically, and swapping it out would trade a good title for a consistent
+    one. The <h1> is the editorial headline the prompt asked for and the model
+    writes it well even when it labels the title, so that is the source.
+
+    Deliberately not truncated. A headline is one unit of meaning and cutting it
+    mid-clause reads worse than a long tag; Google shortens the DISPLAY either
+    way, and length is not itself an error.
+    """
+    current = _first_tag_text(html, "title")
+    if current and not _TEMPLATE_TITLE_RE.search(current):
+        return ""
+
+    headline = _first_tag_text(html, "h1")
+    if not headline:
+        return ""
+
+    name = (intel.get("business_name") or "").strip()
+    if name and name.lower() not in headline.lower():
+        headline = f"{name}: {headline}"
+    return f"{headline} | {PUBLISHER_NAME}"
+
+
+def _replace_title(html: str, title: str) -> str:
+    """Swap the document's <title>, or give it one when it has none."""
+    if not title:
+        return html
+    tag = f"<title>{escape(title)}</title>"
+    if re.search(r"<title\b[^>]*>.*?</title>", html, re.IGNORECASE | re.DOTALL):
+        # A lambda, not a replacement string: a headline containing a backslash
+        # or a \1 would otherwise be read as a group reference.
+        return re.sub(r"<title\b[^>]*>.*?</title>", lambda _m: tag, html,
+                      count=1, flags=re.IGNORECASE | re.DOTALL)
+    return _inject_head_tags(html, tag)
+
+
 def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[dict] = None,
                   meter=None, photo_assets: Optional[dict] = None) -> str:
     """Generate a complete single-file HTML site for a prospect. Returns folder path.
@@ -1631,6 +1683,9 @@ Start with <!DOCTYPE html>"""
     # ticket asks for none of this, so it stays a single-offer concern until
     # someone decides otherwise.
     if offer == "sponsored_story":
+        # Before the head tags, so og:title and the JSON-LD headline read the
+        # same <h1> this may have just promoted into the title.
+        html = _replace_title(html, _editorial_title(html, intel))
         html = _inject_head_tags(html, _seo_head_tags(
             html, intel,
             canonical_url=preview_page_url(public_base, prospect_id),
