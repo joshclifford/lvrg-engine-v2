@@ -490,6 +490,73 @@ def _close_truncated_html(html: str) -> str:
     return html
 
 
+# The booking page as a comparable (host, path) pair, derived from BOOKING_URL
+# rather than written out again so moving the booking page moves this with it.
+_BOOKING_HOST = canonical_domain(BOOKING_URL)
+
+
+def _booking_path(url: str) -> str:
+    """The path part of a URL, without query, fragment or trailing slash."""
+    path = re.sub(r"^[a-z][a-z0-9+.-]*://[^/]*", "", (url or "").strip(), flags=re.IGNORECASE)
+    return path.split("?")[0].split("#")[0].rstrip("/").lower()
+
+
+_BOOKING_PATH = _booking_path(BOOKING_URL)
+
+# Backreference on the opening quote, so a single quote inside a double-quoted
+# href does not end the match early.
+_HREF_RE = re.compile(r"""(href\s*=\s*)(["'])([^"']*)\2""", re.IGNORECASE)
+
+
+def _is_booking_href(href: str) -> bool:
+    """Does this href point at the booking page, whatever it carries after it?"""
+    return (
+        canonical_domain(href) == _BOOKING_HOST
+        and _booking_path(href) == _BOOKING_PATH
+    )
+
+
+def _attribute_booking_links(html: str, booking_url: str, label: str) -> str:
+    """Force every booking link on the page to carry its attribution params.
+
+    The prompt asks for the tracked URL on every CTA, and asking is not the same
+    as knowing (POD01-130). The first Get Listed page built after the params
+    shipped carried both its CTAs bare, while the Sponsored Story built eighteen
+    minutes earlier on the same code carried all five. Nothing caught it because
+    nothing was looking, and a page whose CTAs are silently unattributed reads as
+    a page nobody clicked.
+
+    Rewriting rather than warning: the destination is identical either way, so
+    there is no judgement call to leave to the model. Same reasoning as
+    _inject_base_href, which stopped asking for relative links to resolve and
+    made them resolve. The warning stays so prompt drift is still visible.
+
+    Runs before photo inlining so a base64 blob cannot be scanned for hrefs.
+    """
+    rewritten = 0
+
+    def _swap(match: "re.Match") -> str:
+        nonlocal rewritten
+        prefix, quote, href = match.group(1), match.group(2), match.group(3)
+        if not _is_booking_href(href):
+            return match.group(0)
+        # &amp; is the same link, correctly escaped. Rewriting it would fire the
+        # warning on every build, and a warning that always fires is one nobody
+        # reads.
+        if href.replace("&amp;", "&") == booking_url:
+            return match.group(0)
+        rewritten += 1
+        return f"{prefix}{quote}{booking_url}{quote}"
+
+    html = _HREF_RE.sub(_swap, html)
+    if rewritten:
+        print(
+            f"  [generator] WARNING: {label} carried {rewritten} untracked booking "
+            f"link(s); rewritten to the attributed URL (POD01-130)."
+        )
+    return html
+
+
 def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[dict] = None,
                   meter=None, photo_assets: Optional[dict] = None) -> str:
     """Generate a complete single-file HTML site for a prospect. Returns folder path.
@@ -622,6 +689,7 @@ Start with <!DOCTYPE html>"""
     html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
+    html = _attribute_booking_links(html, booking_url, f"smart site for {intel.get('business_name', '')}")
     _warn_fabricated_reviews(html, "smart site", intel.get("business_name", ""))
     html = _inline_photo_assets(html, photo_assets)
 
@@ -916,6 +984,7 @@ Start with <!DOCTYPE html>"""
     html = first_text(response).strip()
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
+    html = _attribute_booking_links(html, booking_url, f"smart site page {page['filename']}")
     _warn_fabricated_reviews(html, f"smart site page {page['filename']}", intel.get("business_name", ""))
     html = _inline_photo_assets(html, photo_assets)
     return html
@@ -1314,6 +1383,7 @@ Start with <!DOCTYPE html>"""
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
     html = _strip_em_dashes(html)
+    html = _attribute_booking_links(html, booking_url, f"{offer} page for {intel['business_name']}")
 
     # Count the backlinks BEFORE photo inlining, so a base64 blob containing the
     # domain by coincidence cannot inflate the number.
