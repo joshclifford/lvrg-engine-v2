@@ -126,3 +126,126 @@ def test_the_booking_link_still_does_not_count_as_a_backlink():
     html = f'<a href="{url}">Claim This Listing</a>'
     assert generator._count_own_domain_links(html, "mayamooncollective.com") == 0
     assert generator._count_own_domain_links(html, "theresandiego.com") == 1
+# ─── The rewriter ────────────────────────────────────────────────────────────
+#
+# Asking is not the same as carrying. The Sponsored Story page built at 05:58 on
+# 10 Sep carried the params on all five of its CTAs. The Get Listed page built at
+# 06:16, same deployed code, carried none: two CTAs, both bare. The prompt asked
+# for the tracked URL in both places on both offers. Nothing checked, so it
+# shipped, and the only way anyone found out was right-clicking a button.
+#
+# These cover the fix that stopped asking and started rewriting.
+
+
+def _bare(n=1):
+    cta = '<a href="https://theresandiego.com/letschat">Claim This Listing</a>'
+    return "<!DOCTYPE html><html><body>" + cta * n + "</body></html>"
+
+
+def test_a_bare_cta_is_rewritten_rather_than_shipped():
+    tracked = config.build_booking_url("get_listed", "mayamooncollective-com")
+    out = generator._attribute_booking_links(_bare(2), tracked, "get listed page")
+    assert out.count(tracked) == 2
+    assert 'href="https://theresandiego.com/letschat"' not in out
+
+
+def test_an_already_attributed_page_is_left_exactly_as_it_was(capsys):
+    """Rewriting a correct page must be a no-op, and must stay quiet. A warning
+    that fires on every build is one nobody reads."""
+    tracked = config.build_booking_url("sponsored_story", "mayamooncollective-com")
+    html = '<a href="' + tracked + '">Claim This Feature</a>'
+    assert generator._attribute_booking_links(html, tracked, "x") == html
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_an_html_escaped_link_counts_as_already_attributed(capsys):
+    """&amp; is the same URL, correctly escaped. Treating it as wrong would churn
+    a page that was never wrong and warn on every build that got it right."""
+    tracked = config.build_booking_url("get_listed", "poppieco-com")
+    html = '<a href="' + tracked.replace("&", "&amp;") + '">Claim</a>'
+    assert generator._attribute_booking_links(html, tracked, "x") == html
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_the_warning_says_how_many_and_which_page(capsys):
+    """The rewrite hides the failure from the prospect, not from us. Prompt drift
+    is still drift and someone has to be able to see it in the build log."""
+    tracked = config.build_booking_url("get_listed", "poppieco-com")
+    generator._attribute_booking_links(_bare(2), tracked, "get_listed page for Maya Moon")
+    out = capsys.readouterr().out
+    assert "2 untracked booking link(s)" in out
+    assert "get_listed page for Maya Moon" in out
+
+
+def test_every_way_the_model_writes_the_booking_page_is_recognised():
+    """It writes the URL from memory and does not write it the same way twice.
+    Matching the literal string would miss most of the ways it comes out wrong,
+    including a half-remembered set of params."""
+    tracked = config.build_booking_url("get_listed", "poppieco-com")
+    for variant in (
+        "https://www.theresandiego.com/letschat",
+        "http://theresandiego.com/letschat",
+        "https://theresandiego.com/letschat/",
+        "HTTPS://TheReSanDiego.com/LetsChat",
+        "https://theresandiego.com/letschat?utm_source=somethingelse",
+    ):
+        html = "<a href='" + variant + "'>Book</a>"
+        out = generator._attribute_booking_links(html, tracked, "x")
+        assert tracked in out, variant
+
+
+def test_every_other_link_on_the_page_is_left_alone():
+    """The prospect's own backlinks ARE the product on these offers, and the
+    footer socials are theirs too. A blunt rewrite would eat both. /advertise/ is
+    the same host and a different page: it must survive as well."""
+    tracked = config.build_booking_url("sponsored_story", "poppieco-com")
+    html = (
+        '<a href="https://poppieco.com/menu">Menu</a>'
+        '<a href="https://instagram.com/poppieco">Instagram</a>'
+        '<a href="https://theresandiego.com/advertise/">Advertise</a>'
+        '<a href="https://theresandiego.com/letschat">Book</a>'
+    )
+    out = generator._attribute_booking_links(html, tracked, "x")
+    assert 'href="https://poppieco.com/menu"' in out
+    assert 'href="https://instagram.com/poppieco"' in out
+    assert 'href="https://theresandiego.com/advertise/"' in out
+    assert out.count(tracked) == 1
+
+
+def test_a_get_listed_page_ships_attributed_even_when_the_model_ignores_the_prompt(monkeypatch):
+    """The 10 Sep failure, as a test. The model was asked for the tracked URL,
+    wrote the bare one on both CTAs, and the page went live that way."""
+    captured = []
+    monkeypatch.setattr(
+        generator, "_get_client", lambda **k: _mock_client(captured, html=_bare(2))
+    )
+
+    html = generator.generate_offer_lead_magnet_page(
+        "get_listed", _intel(), prospect_id="mayamooncollective-com---get-listed"
+    )
+
+    expected = config.build_booking_url("get_listed", "mayamooncollective-com---get-listed")
+    assert html.count(expected) == 2
+    assert 'href="https://theresandiego.com/letschat"' not in html
+
+
+def test_a_smart_site_page_ships_attributed_when_the_model_ignores_the_prompt_there(monkeypatch):
+    """Smart Site shares the booking page and the same prompt-compliance risk.
+    Wiring the rewrite into two of the three generators would leave the third
+    quietly anonymous, which is the shape of the bug being fixed."""
+    import test_generate_page as tgp
+
+    captured = []
+    monkeypatch.setattr(
+        generator, "_get_client", lambda **k: tgp._mock_client(captured, html=_bare(1))
+    )
+
+    html = generator.generate_page(
+        tgp._rich_intel(),
+        generator._get_design_personality("other"),
+        tgp._nav_plan()[0],
+        tgp._nav_plan(),
+        prospect_id="acmedental-com",
+    )
+
+    assert config.build_booking_url("smart_site", "acmedental-com") in html
