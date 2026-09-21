@@ -286,7 +286,7 @@ def test_the_claim_bar_is_never_a_candidate_quote():
     for bar in (
         "This is a preview of your Sponsored Story",
         "This is a preview of your ThereSanDiego.com listing",
-        "This site was built for Pop Pie Co by LVRG Agency",
+        "This is a preview of your new website for Pop Pie Co",
     ):
         assert len(bar) >= 40, bar
         html = f'<div>"{bar}"</div><p>Ana, San Diego, CA</p>'

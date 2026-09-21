@@ -914,7 +914,7 @@ NO inline style= attributes. Use Tailwind classes exclusively.
 Build a single-file HTML homepage (index.html).
 
 1. CLAIM BAR — sticky, black bg, centered single line:
-   "This site was built for **{intel['business_name']}** by There San Diego"
+   "This is a preview of your new website for **{intel['business_name']}**"
    + gold pill "Claim This Site →" button linking to {booking_url}
    Use that URL exactly as written, query string included: the params say which lead and
    which offer the click came from, and a CTA that drops them arrives anonymous.
@@ -1234,7 +1234,7 @@ the same links.
 This is a single HTML page ({page['filename']}), one of {len(nav)} pages in this build.
 
 1. CLAIM BAR — sticky, black bg, centered single line:
-   "This site was built for **{intel['business_name']}** by There San Diego"
+   "This is a preview of your new website for **{intel['business_name']}**"
    + gold pill "Claim This Site →" button linking to {booking_url}
    Use that URL exactly as written, query string included: the params say which lead and
    which offer the click came from, and a CTA that drops them arrives anonymous.
