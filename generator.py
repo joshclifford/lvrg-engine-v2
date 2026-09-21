@@ -914,7 +914,7 @@ NO inline style= attributes. Use Tailwind classes exclusively.
 Build a single-file HTML homepage (index.html).
 
 1. CLAIM BAR — sticky, black bg, centered single line:
-   "This site was built for **{intel['business_name']}** by LVRG Agency"
+   "This site was built for **{intel['business_name']}** by There San Diego"
    + gold pill "Claim This Site →" button linking to {booking_url}
    Use that URL exactly as written, query string included: the params say which lead and
    which offer the click came from, and a CTA that drops them arrives anonymous.
@@ -1234,7 +1234,7 @@ the same links.
 This is a single HTML page ({page['filename']}), one of {len(nav)} pages in this build.
 
 1. CLAIM BAR — sticky, black bg, centered single line:
-   "This site was built for **{intel['business_name']}** by LVRG Agency"
+   "This site was built for **{intel['business_name']}** by There San Diego"
    + gold pill "Claim This Site →" button linking to {booking_url}
    Use that URL exactly as written, query string included: the params say which lead and
    which offer the click came from, and a CTA that drops them arrives anonymous.
@@ -1513,7 +1513,7 @@ Advertising prospect on a Sponsored Story plan, of which LOCAL at $497/month is 
 
 STRUCTURE (this is an editorial feature mock-up, not a full website):
 1. CLAIM BAR: sticky, same as every LVRG preview.
-   "This is a preview of your Sponsored Story" plus gold pill "Claim This Feature →" linking to {booking_url}
+   "This is a preview of your Sponsored Story" plus gold pill "Claim This Story →" linking to {booking_url}
 2. ARTICLE HEADER: a real editorial-style headline about {intel['business_name']}, never a generic
    "About Us" title. Byline "There San Diego Staff", a dateline reading "San Diego", hero photo if provided.
 3. THE STORY: 7-9 paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice, using their
