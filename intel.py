@@ -940,6 +940,176 @@ def _mentions_business(sentence: str, business_name: str) -> bool:
     return any(t in s for t in tokens)
 
 
+# ── social profiles ─────────────────────────────────────────────────────────
+#
+# Nothing here read socials before. The only source was the app merging Apify's
+# facebook/instagram/linkedin columns in api.py, so a lead Apify had nothing for
+# got a Sponsored Story with an empty Social row and no profile card, while its
+# Instagram handle was sitting in the footer of the page we had just scraped.
+#
+# Two passes, cheapest first: the prospect's own markup, then a search. The
+# search costs a Firecrawl call and only runs when the scrape found no
+# Instagram, which is the one platform the story actually shows.
+
+# Which URL shapes are a PROFILE rather than a post, a share button or a widget.
+# The share links matter: a "share this on Facebook" button carries
+# facebook.com/sharer/sharer.php?u=<their page>, which matches a naive
+# facebook.com regex and would publish a share endpoint as the business's page.
+# `_END` is what separates a profile from a deeper path. It asserts the url
+# stops here: the next character is a quote, a space, a tag, a query string,
+# anything but more path. That is what keeps instagram.com/p/<postid> out,
+# because "p" cannot be followed by another path segment and still be a handle.
+_END = r"/?(?![A-Za-z0-9_.\-/])"
+
+_SOCIAL_PATTERNS = [
+    ("instagram_url", re.compile(
+        r"https?://(?:www\.)?instagram\.com/([A-Za-z0-9_.]{2,30})" + _END, re.I)),
+    ("facebook_url", re.compile(
+        r"https?://(?:www\.|web\.|m\.)?facebook\.com/([A-Za-z0-9.\-]{3,60})" + _END, re.I)),
+    ("linkedin_url", re.compile(
+        r"https?://(?:[a-z]{2}\.|www\.)?linkedin\.com/(?:company|in)/([A-Za-z0-9\-_%]{2,80})" + _END,
+        re.I)),
+    ("tiktok_url", re.compile(
+        r"https?://(?:www\.)?tiktok\.com/@([A-Za-z0-9_.]{2,30})" + _END, re.I)),
+    ("youtube_url", re.compile(
+        r"https?://(?:www\.)?youtube\.com/(?:@|c/|user/|channel/)([A-Za-z0-9_\-]{2,60})" + _END,
+        re.I)),
+]
+
+# Handles that are the platform's own furniture, a share endpoint, or somebody
+# else entirely. "tr" and "p" are Instagram's own paths; "sharer" and "dialog"
+# are the share buttons; the rest are the platform's product pages.
+_NOT_A_PROFILE = {
+    "p", "reel", "reels", "explore", "stories", "accounts", "tv", "tr", "direct",
+    "sharer", "share", "dialog", "plugins", "profile", "pages", "groups",
+    "events", "watch", "login", "signup", "home", "help", "legal", "privacy",
+    "policies", "about", "developer", "developers", "business", "creators",
+    "shop", "feed", "results", "embed", "intent", "hashtag",
+}
+
+
+def _profile_links(html: str) -> dict:
+    """Every social PROFILE url in a page's markup, keyed as the app keys them.
+
+    First match per platform wins, which in practice is the header or footer
+    social row. Later matches are usually the share buttons under an article.
+    """
+    found = {}
+    for key, pattern in _SOCIAL_PATTERNS:
+        for match in pattern.finditer(html or ""):
+            handle = match.group(1).lower()
+            # profile.php?id=… is Facebook's own numeric-id page, not a vanity
+            # url. Removing the extension with rstrip(".php") would strip
+            # CHARACTERS, not the suffix: it eats the trailing "e" of "profile"
+            # too on any handle ending in one of those letters.
+            if handle.endswith(".php"):
+                handle = handle[:-4]
+            if handle in _NOT_A_PROFILE:
+                continue
+            found[key] = match.group(0).rstrip("/")
+            break
+    return found
+
+
+# Stop-words for matching a HANDLE, which is a harder problem than matching a
+# page of prose. _mentions_business accepts any one distinctive token, which is
+# right for "is this article about them" and wrong here: "coffee" matched
+# "someothercoffeeshop" against "Dark Horse Coffee Roasters" and would have
+# published a stranger's Instagram under their name.
+_HANDLE_STOP = {
+    "the", "and", "for", "inc", "llc", "ltd", "co", "company", "group", "shop",
+    "store", "cafe", "coffee", "kitchen", "restaurant", "bar", "grill", "bakery",
+    "studio", "salon", "services", "service", "solutions", "realty", "realtor",
+    "real", "estate", "homes", "team", "san", "diego", "california",
+}
+
+
+def _handle_matches_business(handle: str, business_name: str) -> bool:
+    """Is this account plausibly theirs?
+
+    Deliberately strict, because the two outcomes are not symmetrical. A
+    rejection costs a profile card. An acceptance publishes a link to somebody
+    else's account on a page carrying this business's name, emailed to that
+    business, which is the one reader certain to click it.
+
+    Only used on SEARCH results. A link in their own footer needs no test: they
+    put it there.
+    """
+    flat = re.sub(r"[^a-z0-9]", "", (handle or "").lower())
+    name = re.sub(r"[^a-z0-9]", "", (business_name or "").lower())
+    if not flat or not name:
+        return False
+    if name in flat or flat in name:
+        return True
+
+    tokens = [w for w in re.findall(r"[a-z0-9]+", business_name.lower())
+              if len(w) >= 4 and w not in _HANDLE_STOP]
+    hits = sum(1 for t in tokens if t in flat)
+    # Two distinctive words, or the whole of a name that only has one.
+    return hits >= 2 if len(tokens) >= 2 else bool(tokens) and hits == 1
+
+
+def search_instagram(business_name: str, location: str = "") -> str:
+    """Find a business's Instagram when its own site never links one.
+
+    Instagram only, and only as a fallback. It is the profile the Sponsored
+    Story shows, and searching for the rest would spend a call per platform on
+    rows that are a single grey line in a sidebar.
+
+    Returns "" rather than a guess. A profile card pointing at the wrong
+    account is worse than no card on a page carrying the prospect's own name:
+    the one person certain to check it is the business itself.
+    """
+    if not FIRECRAWL_KEY or not business_name:
+        return ""
+
+    where = f" {location}" if location else ""
+    try:
+        resp = requests.post(
+            FIRECRAWL_SEARCH,
+            headers={"Authorization": f"Bearer {FIRECRAWL_KEY}",
+                     "Content-Type": "application/json"},
+            json={"query": f'"{business_name}"{where} instagram', "limit": 5,
+                  "country": "US", "ignoreInvalidURLs": True},
+            timeout=15,  # a nice-to-have; never let it eat the build budget
+        )
+        if resp.status_code != 200:
+            print(f"  [intel] Instagram search failed: {resp.status_code}")
+            return ""
+
+        payload = resp.json().get("data", {})
+        results = payload.get("web", []) if isinstance(payload, dict) else payload
+
+        # The search returns whatever ranks, so the handle has to look like the
+        # business before it is believed. This is the whole defence against
+        # publishing a competitor's account under this business's name.
+        for result in results or []:
+            link = _profile_links(result.get("url", "")).get("instagram_url")
+            if not link:
+                continue
+            if _handle_matches_business(link.rsplit("/", 1)[-1], business_name):
+                print(f"  [intel] Instagram found by search: {link}")
+                return link
+        print(f"  [intel] No Instagram matched {business_name!r} — leaving it off")
+        return ""
+    except Exception as e:
+        print(f"  [intel] Instagram search failed: {e}")
+        return ""
+
+
+def find_socials(raw_html: str, business_name: str, location: str = "",
+                 search_fallback: bool = True) -> dict:
+    """The business's social profiles: their own markup first, then a search."""
+    socials = _profile_links(raw_html)
+    if socials:
+        print(f"  [intel] Socials on site: {', '.join(sorted(socials))}")
+    if search_fallback and "instagram_url" not in socials:
+        found = search_instagram(business_name, location)
+        if found:
+            socials["instagram_url"] = found
+    return socials
+
+
 def fetch_press_mentions(business_name: str, location: str = "") -> list:
     """Search for press/media mentions via Firecrawl search.
 
@@ -1158,10 +1328,16 @@ def scrape_site(domain: str, page_url: str = "", meter=None) -> dict:
     print(f"  [intel] Photos inlined: {len(photo_assets)}/"
           f"{min(len(photos), _PHOTO_INLINE_MAX)}")
 
+    # Their own markup is free, so it is read whatever the clock says. Only the
+    # search fallback is charged against the budget, alongside press.
+    elapsed = time.monotonic() - started
+    over_budget = elapsed > INTEL_BUDGET_SECONDS
+    socials = find_socials(raw_html, business_name, location,
+                           search_fallback=not over_budget)
+
     # Press is the one genuinely optional stage — skip it if the scrape and the
     # extraction already ate the intel budget.
-    elapsed = time.monotonic() - started
-    if elapsed > INTEL_BUDGET_SECONDS:
+    if over_budget:
         print(f"  [intel] Skipping press search — intel already took {elapsed:.0f}s "
               f"of its {INTEL_BUDGET_SECONDS}s budget")
         press = []
@@ -1204,6 +1380,12 @@ def scrape_site(domain: str, page_url: str = "", meter=None) -> dict:
         # missing here keeps pointing at the prospect's own server.
         "photo_assets": photo_assets,
         "press_mentions": press,
+        # Their social profiles, read off their own page and searched for when
+        # the page linked none. Was never gathered here at all: the only source
+        # was the app merging Apify's columns in api.py, so a lead Apify had
+        # nothing for shipped a Sponsored Story with an empty Social row while
+        # its Instagram handle sat in the footer of the page we just scraped.
+        "socials": socials,
         # Rating and review count are real data the app already holds (Google
         # Maps via Apify). api.py merges them in from engine_queue when present.
         # We no longer scrape them — the old Yelp regex matched any JSON field

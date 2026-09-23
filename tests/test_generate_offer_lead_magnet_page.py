@@ -93,18 +93,19 @@ def test_get_listed_unknown_vertical_degrades_to_generic_framing_not_a_crash(mon
     assert "local business" in prompt
 
 
-def test_sponsored_story_prompt_mentions_editorial_voice_and_real_plan_pricing(monkeypatch):
+def test_sponsored_story_asks_for_editorial_voice_and_ships_the_real_pricing(monkeypatch):
+    """The voice is the model's job and stays a prompt assertion. The prices are
+    not: they moved into tsd_theme.PLANS as fixed markup, so this reads the
+    finished page, which is the thing the prospect is quoted from."""
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
-    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+    html = generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
 
-    prompt = _prompt_text(captured)
-    assert "editorial" in prompt
-    assert "guaranteed impressions" in prompt
-    assert "$497/month" in prompt
-    assert "$997/month" in prompt
-    assert "$1,500/month" in prompt
+    assert "editorial" in _prompt_text(captured)
+    assert "guaranteed impressions" in html
+    for price in ("$497", "$997", "$1,500"):
+        assert f"{price}<em>/month</em>" in html, price
 
 
 def test_sponsored_story_never_quotes_the_first_look_social_price(monkeypatch):
@@ -186,21 +187,27 @@ def test_every_advertised_number_matches_the_live_tsd_funnel(monkeypatch):
     Sources: /story-plans for the tiers, / for the audience figures,
     /business-profile-checkout for the $297. If TSD changes a price, this test
     should fail and be updated deliberately, not drift quietly.
+
+    Reads the rendered page for the Sponsored Story numbers. They are fixed
+    markup in tsd_theme now rather than a paragraph of prompt, so the prompt no
+    longer carries them and asserting on it would pass an empty page. The $297
+    is still the model's to write, so it stays a prompt assertion.
     """
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
-    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
-    prompt = _prompt_text(captured)
+    html = generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
 
     for tier, price, impressions in (
-        ("LOCAL", "$497/month", "10,000"),
-        ("CITYWIDE", "$997/month", "25,000"),
-        ("COUNTYWIDE", "$1,500/month", "50,000"),
+        ("LOCAL", "$497", "10,000"),
+        ("CITYWIDE", "$997", "25,000"),
+        ("COUNTYWIDE", "$1,500", "50,000"),
     ):
-        assert tier in prompt
-        assert price in prompt
-        assert impressions in prompt
+        assert f"<h3>{tier}</h3>" in html
+        # Monthly, and said so on the page. One build rendered these as
+        # one-time fees while the prompt that asked for them said "per month".
+        assert f"{price}<em>/month</em>" in html
+        assert f"{impressions} guaranteed impressions a month" in html
 
     # Audience figures, verbatim from the client's own "real numbers to hold to"
     # in campaign-advertising.md, which is the list TSD's own reps work from.
@@ -216,8 +223,8 @@ def test_every_advertised_number_matches_the_live_tsd_funnel(monkeypatch):
     # Assert the "+" too. It is the difference between a floor TSD publishes and
     # an exact count nobody measured.
     for stat in ("70,000+", "700,000+", "25,000+", "80,000+"):
-        assert stat in prompt
-    assert "82,000" not in prompt
+        assert stat in html
+    assert "82,000" not in html
 
     captured.clear()
     generator.generate_offer_lead_magnet_page("get_listed", _intel())

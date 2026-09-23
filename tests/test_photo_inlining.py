@@ -12,6 +12,7 @@ into its finished html.
 """
 
 import inspect
+import re
 
 import pytest
 
@@ -190,8 +191,12 @@ def test_missing_assets_leave_the_html_alone():
     "generate_offer_lead_magnet_page",
 ])
 def test_every_producer_inlines_its_photos(producer):
+    """The markup variable is not fixed: generate_offer_lead_magnet_page holds a
+    Sponsored Story in `article` while the There San Diego chrome is wrapped
+    around it. What matters is that photo_assets reaches the substitution, not
+    what the local happens to be called."""
     src = inspect.getsource(getattr(generator, producer))
-    assert "_inline_photo_assets(html, photo_assets)" in src, \
+    assert re.search(r"_inline_photo_assets\(\w+, photo_assets\)", src), \
         f"{producer} publishes html without rehosting its photos"
 
 

@@ -258,10 +258,16 @@ def _merge_known(intel: dict, known: dict) -> list:
             intel["review_count"] = known["review_count"]
         used.append("rating")
 
+    # Merged, not replaced. The scrape reads socials off the prospect's own page
+    # now and finds platforms Apify does not carry (TikTok, YouTube); assigning
+    # over the top threw those away whenever the app had a single Facebook url.
+    # The app's values still win on the keys it has: those come from Apify's
+    # Google Maps record, which is a verified listing rather than a link in a
+    # footer that may belong to the web designer.
     socials = {k: known[k] for k in ("facebook_url", "instagram_url", "linkedin_url")
                if known.get(k)}
     if socials:
-        intel["socials"] = socials
+        intel["socials"] = {**(intel.get("socials") or {}), **socials}
         used.append("socials")
 
     return used

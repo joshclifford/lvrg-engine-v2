@@ -19,6 +19,7 @@ from typing import Optional
 import anthropic
 
 import cost
+import tsd_theme
 from claude_text import first_text
 from config import (SITES_DIR, BOOKING_URL, build_booking_url, SENDER_NAME, SENDER_AGENCY,
                     PUBLISHER_NAME, PREVIEW_PUBLIC_BASE)
@@ -833,19 +834,6 @@ def _editorial_title(html: str, intel: dict) -> str:
     return f"{headline} | {PUBLISHER_NAME}"
 
 
-def _replace_title(html: str, title: str) -> str:
-    """Swap the document's <title>, or give it one when it has none."""
-    if not title:
-        return html
-    tag = f"<title>{escape(title)}</title>"
-    if re.search(r"<title\b[^>]*>.*?</title>", html, re.IGNORECASE | re.DOTALL):
-        # A lambda, not a replacement string: a headline containing a backslash
-        # or a \1 would otherwise be read as a group reference.
-        return re.sub(r"<title\b[^>]*>.*?</title>", lambda _m: tag, html,
-                      count=1, flags=re.IGNORECASE | re.DOTALL)
-    return _inject_head_tags(html, tag)
-
-
 def generate_site(intel: dict, prospect_id: str, notes: str = "", r6: Optional[dict] = None,
                   meter=None, photo_assets: Optional[dict] = None) -> str:
     """Generate a complete single-file HTML site for a prospect. Returns folder path.
@@ -1507,71 +1495,103 @@ STRUCTURE (this is a directory profile mock-up, not a full website):
         # Do not price this off First Look. First Look ($197 one-time) is a SOCIAL
         # plan, an Instagram post rather than an article, and sits on /social-plans.
         # Sponsored Stories are monthly and start at $497. Verified 7 Sep 2026.
-        page_purpose = f"""This is a MOCK-UP of a Sponsored Story: a short editorial feature as it would
-run on ThereSanDiego.com and get promoted to their 70,000+ monthly audience, built to close an
-Advertising prospect on a Sponsored Story plan, of which LOCAL at $497/month is the entry tier.
+        #
+        # This asks for the ARTICLE ONLY. The site header, the sponsored-listing
+        # disclosure, the Business Details sidebar, the plan cards and the footer
+        # are fixed markup in tsd_theme.py, measured off a live ThereSanDiego
+        # profile. Asking the model for a whole page got back a Tailwind landing
+        # page with fonts of its own and no site around it, which is the one
+        # thing a "here is your story on our site" mockup cannot be.
+        page_purpose = f"""You are writing the ARTICLE BODY of a Sponsored Story about {intel['business_name']}:
+a short editorial feature as it would run on ThereSanDiego.com and get promoted to their 70,000+
+monthly audience, built to close an Advertising prospect.
 
-STRUCTURE (this is an editorial feature mock-up, not a full website):
-1. CLAIM BAR: sticky, same as every LVRG preview.
-   "This is a preview of your Sponsored Story" plus gold pill "Claim This Story →" linking to {booking_url}
-2. ARTICLE HEADER: a real editorial-style headline about {intel['business_name']}, never a generic
-   "About Us" title. Byline "There San Diego Staff", a dateline reading "San Diego", hero photo if provided.
-3. THE STORY: 7-9 paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice, using their
+You are NOT building a page. The ThereSanDiego site header, the sponsored-listing disclosure, the
+Business Details sidebar, the plan cards and the footer already exist and will be wrapped around
+what you write. Write the article and nothing else.
+
+WRITE EXACTLY THIS, IN THIS ORDER, WITH THESE EXACT CLASS NAMES:
+
+1. <h1>: a real editorial headline about {intel['business_name']}, never a generic "About Us" title.
+2. <div class="tsd-byline">By <strong>There San Diego Staff</strong> &middot; San Diego</div>
+3. The hero photo if one was supplied: <img class="tsd-hero" src="..." alt="...">
+4. THE STORY: 7-9 paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice, using their
    REAL description, services and neighborhood. It should read like a feature a San Diegan would
    actually enjoy, not an ad. Break it up so it scans like a magazine piece rather than a wall of text:
-   - Two or three SUBHEADINGS between sections, written as real editorial lines, never "About" or "Services"
-   - One PULL QUOTE styled large and set apart. It must be drawn from THEIR OWN description or services,
-     never attributed to a customer and never in quotation marks as if someone said it
-   - Photos placed BETWEEN paragraphs, not all stacked at the top. See the photo rule below.
+   - Two or three SUBHEADINGS between sections as plain <h2>, written as real editorial lines,
+     never "About" or "Services"
+   - One PULL QUOTE, as <div class="tsd-pullquote"><p>...</p></div>. It must be drawn from THEIR OWN
+     description or services, never attributed to a customer and never in quotation marks as if
+     someone said it
+   - Photos placed BETWEEN paragraphs, as
+     <figure><img src="..." alt="..."><figcaption>...</figcaption></figure>. See the photo rule below
    Cover, in this order: what the place is and where it sits, the story of how it came to be if their
    own content supports it, what they actually do best drawn from their real services, what makes it
    worth the trip, what a first-time visitor should do, and a closing beat built on what they want
    visitors to do. Never pad: if their content does not support nine paragraphs, write seven good ones
    rather than nine with filler.
-4. THE DETAILS: a short editorial fact box beside or under the story, built ONLY from real data above.
-   Neighborhood, hours, phone, rating, and a link to their website, each only if present. Omit the box
-   if fewer than two exist. Never print "Not listed" or an empty row.
-5. SOCIAL PROOF: if a rating and review count were supplied above, work the stat into the story or the
-   fact box. The stat is the whole of it. Re-read the REVIEWS rule above and apply it here AND in the
+5. THE DETAILS: close the article with
+   <div class="tsd-factbox"><h3>The Details</h3><ul><li><strong>Label:</strong> value</li>...</ul></div>
+   built ONLY from real data given above. Neighborhood, hours, phone, rating and a link to their
+   website, each only if present. Omit the box entirely if fewer than two exist. Never print
+   "Not listed" and never write an empty row.
+6. SOCIAL PROOF: if a rating and review count were supplied above, work the stat into the story or the
+   fact box, in exactly this form: one gold star, the rating, then the review count in brackets, for
+   example "★ 4.7 (14 reviews)". Never a row of stars: 4.7 drawn as five stars overstates it.
+   The stat is the whole of it. Re-read the REVIEWS rule above and apply it here AND in the
    pull quote AND anywhere in the article body, because this is the section that has broken before.
    The failure was not a fake testimonial with a name under it. It was a line in the middle of the
    story reading "Yelp reviewers have specifically called out ..." on a page with no review text
    behind it. An editorial voice makes that sentence easy to write and no less invented.
    The pull quote is THEIR OWN words about themselves, set large and WITHOUT quotation
-   marks, exactly as item 3 says. Set large is what makes it a pull quote. Quotation
+   marks, exactly as item 4 says. Setting it large is the wrapper's job, not yours. Quotation
    marks would make it look like someone said it to a reporter, and nobody did.
-   This page carries no quoted speech at all.
-   If no rating, omit this section.
-5b. LINKS BACK TO THEIR SITE: this is not decoration, it is the product. A Sponsored Story is sold on
-   "published on ThereSanDiego.com with links back to your website", and the SEO value of the placement
-   IS those links. The page must carry at least THREE, all pointing at https://{intel['domain']}:
+   This article carries no quoted speech at all.
+   If no rating, omit this entirely.
+7. LINKS BACK TO THEIR SITE: this is not decoration, it is the product. A Sponsored Story is sold on
+   "published on ThereSanDiego.com with links back to your website", and the SEO value of the
+   placement IS those links. The article must carry at least THREE, all pointing at {own_site_url}:
    - the business name in the FIRST paragraph, linked inline
    - one contextual link mid-article on a real phrase, for example their signature service or menu
    - one in the fact box or the closing paragraph, reading as a plain invitation to visit their site
-   Use their real domain exactly as given. Style them as normal editorial links, underlined or coloured,
-   never as buttons. Never add rel="nofollow": the whole point of the placement is that the link counts.
-   If their socials were supplied, link those too, in the footer only.
-6. GUARANTEE CALLOUT: "Every Sponsored Story comes with guaranteed impressions. If we don't hit the number, we keep promoting until we do."
-7. REACH: a short stat strip using ThereSanDiego's real audience numbers.
-   70,000+ monthly visitors, 700,000+ monthly reach, 25,000+ newsletter subscribers,
-   80,000+ social followers across Facebook and Instagram. Do not inflate or invent any of these.
-   Carry the "+" where it is written above. These are TSD's own published figures and the "+"
-   is part of them: 80,000+ is what the client's rep guardrails say to hold to, and dropping it
-   turns a floor into an exact count we did not measure.
-8. PLANS: the three real tiers, as three simple cards. State the monthly price plainly.
-   These are MONTHLY plans and must never be shown as a one-time fee.
-   - LOCAL, $497/month, 10,000 guaranteed impressions a month, neighborhood targeting, one story per quarter
-   - CITYWIDE, $997/month, 25,000 guaranteed impressions a month, the full San Diego metro, one story per month
-   - COUNTYWIDE, $1,500/month, 50,000 guaranteed impressions a month, all of San Diego County, one story per month
-   Under the cards, one line: "Every plan includes ad campaign management and geo, age and demographic targeting. Organic impressions are never charged."
-9. CTA: driving to {booking_url}
-10. FOOTER: location, phone, hours."""
+   Use their real URL exactly as given. Plain <a href="...">text</a>, styled by the wrapper, never a
+   button. Never add rel="nofollow": the whole point of the placement is that the link counts.
+   Do not link their socials here. The sidebar already carries those.
+
+Do not write a claim bar, a nav, a pricing table, an impressions guarantee, a reach stat strip, a
+booking button or a footer. Every one of those is already built around you, and a second copy of any
+of them is the giveaway that the page was generated."""
     else:
         raise ValueError(f"Unknown offer for generate_offer_lead_magnet_page: {offer!r}")
 
     # The Sponsored Story is sold on its backlinks, so it carries one more than
     # the profile does.
     min_own_links = 3 if offer == "sponsored_story" else 2
+
+    # A Sponsored Story is a fragment dropped into a stylesheet it does not own,
+    # so it gets a markup contract where the profile gets a tech stack. A
+    # Tailwind CDN tag inside the ThereSanDiego chrome restyles the whole page,
+    # which is the exact failure the chrome exists to stop.
+    if offer == "sponsored_story":
+        tech_stack = """━━━ MARKUP ━━━
+The wrapper carries the fonts, the colours and every rule the article needs. You write semantic
+HTML and nothing else: <h1>, <h2>, <p>, <a>, <img>, <figure>, <ul>, <li>, plus the three class
+names named in the structure below (tsd-byline, tsd-hero, tsd-pullquote, tsd-factbox).
+NO <style> block, NO CSS framework, NO Tailwind, NO style= attributes, NO class names of your own.
+Anything you style yourself will look like a different website sitting inside this one."""
+        output_rule = """━━━ OUTPUT ━━━
+Return ONLY the article markup, as an HTML FRAGMENT starting with <h1>. No explanation, no markdown
+fences, no <!DOCTYPE>, no <html>, <head>, <body>, <title>, <style> or <script>, and no chat widget."""
+    else:
+        tech_stack = f"""━━━ TECH STACK ━━━
+Use Tailwind CSS via CDN. Include this in <head>:
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = {{ theme: {{ extend: {{ colors: {{ brand: '{intel.get('primary_color','#f59e0b')}' }} }} }} }}</script>
+Use Google Fonts matching the brand vibe above.
+NO inline style= attributes. Use Tailwind classes exclusively."""
+        output_rule = """━━━ OUTPUT ━━━
+Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).
+Start with <!DOCTYPE html>"""
 
 
     page_prompt = f"""You are building a personalized lead-magnet PREVIEW PAGE for {intel['business_name']}.
@@ -1601,12 +1621,7 @@ This is NOT a full business website. See the specific structure below for what i
 
 {social_block}
 
-━━━ TECH STACK ━━━
-Use Tailwind CSS via CDN. Include this in <head>:
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config = {{ theme: {{ extend: {{ colors: {{ brand: '{intel.get('primary_color','#f59e0b')}' }} }} }} }}</script>
-Use Google Fonts matching the brand vibe above.
-NO inline style= attributes. Use Tailwind classes exclusively.
+{tech_stack}
 
 ━━━ REQUIRED LINKS ━━━
 Two different destinations. Do not confuse them, and do not let one stand in for the other.
@@ -1664,9 +1679,7 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
   bytes are paid for twice: four images used in seven places produced a 5 MB page that the preview
   proxy refused to serve at all
 
-━━━ OUTPUT ━━━
-Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).
-Start with <!DOCTYPE html>"""
+{output_rule}"""
 
     client = _get_client(max_retries=PAGE_GENERATION_MAX_RETRIES)
     with client.messages.stream(
@@ -1685,7 +1698,16 @@ Start with <!DOCTYPE html>"""
     html = _strip_markdown_fences(html)
     html = _close_truncated_html(html)
     html = _strip_em_dashes(html)
-    html = _attribute_booking_links(html, booking_url, f"{offer} page for {intel['business_name']}")
+
+    # A Sponsored Story is an article dropped into fixed ThereSanDiego chrome,
+    # so everything that MEASURES the model's work has to run on the article
+    # rather than the finished page. The chrome links to the prospect's own site
+    # in its fact panel, carries TSD's logo as the first <img> on the page, and
+    # opens with a sponsorship disclosure longer than the meta-description
+    # cut-off. Measured after the wrap, the backlink guard would pass a story
+    # with two backlinks, og:image would be the There San Diego logo, and the
+    # Google snippet would be the disclosure instead of the story.
+    article = _story_article(html) if offer == "sponsored_story" else html
 
     # Count the backlinks BEFORE photo inlining, so a base64 blob containing the
     # domain by coincidence cannot inflate the number.
@@ -1696,7 +1718,7 @@ Start with <!DOCTYPE html>"""
     # reports what actually shipped. A warning rather than a raise: a page with
     # too few links is still a usable mockup, and failing the build would cost
     # the user a generation over something a rebuild may fix.
-    own_links = _count_own_domain_links(html, intel.get("domain", ""))
+    own_links = _count_own_domain_links(article, intel.get("domain", ""))
     if own_links < min_own_links:
         print(
             f"  [generator] WARNING: {offer} page for {intel['business_name']} carries "
@@ -1704,27 +1726,35 @@ Start with <!DOCTYPE html>"""
             f"{min_own_links}. The backlink IS the product on this offer."
         )
 
-    _warn_fabricated_reviews(html, offer, intel.get("business_name", ""))
+    _warn_fabricated_reviews(article, offer, intel.get("business_name", ""))
 
     # Read before inlining. After it this src is a data: URI, and og:image has
     # to be an address a crawler can go and fetch.
-    hero_image = _first_remote_image(html)
+    hero_image = _first_remote_image(article)
 
-    html = _inline_photo_assets(html, photo_assets)
+    article = _inline_photo_assets(article, photo_assets)
 
     # The article half of what a Sponsored Story is sold as (POD01-126). Get
     # Listed is a directory profile rather than a published article and its own
     # ticket asks for none of this, so it stays a single-offer concern until
     # someone decides otherwise.
     if offer == "sponsored_story":
-        # Before the head tags, so og:title and the JSON-LD headline read the
-        # same <h1> this may have just promoted into the title.
-        html = _replace_title(html, _editorial_title(html, intel))
-        html = _inject_head_tags(html, _seo_head_tags(
-            html, intel,
+        head_tags = _seo_head_tags(
+            article, intel,
             canonical_url=preview_page_url(public_base, prospect_id),
             image_url=hero_image,
-        ))
+        )
+        # After the SEO read, so a social url can never become og:image, and
+        # after inlining, so the card is never mistaken for a prospect photo.
+        article = tsd_theme.insert_social_card(article, intel)
+        html = tsd_theme.render_story_page(
+            article, intel, booking_url, _story_title(html, intel),
+        )
+        html = _inject_head_tags(html, head_tags)
+    else:
+        html = article
+
+    html = _attribute_booking_links(html, booking_url, f"{offer} page for {intel['business_name']}")
 
     # The proxy in leadscraper (api/preview/index.ts) refuses anything over
     # 5 MB with a 502, and the prospect gets a blank "Preview unavailable" while
@@ -1739,6 +1769,55 @@ Start with <!DOCTYPE html>"""
         )
 
     return html
+
+
+_BODY_RE = re.compile(r"<body\b[^>]*>(.*?)</body>", re.IGNORECASE | re.DOTALL)
+
+
+def _story_article(html: str) -> str:
+    """The article markup out of whatever the model actually returned.
+
+    The prompt asks for a fragment, and asking is not the same as knowing. A
+    model that writes a whole document anyway would nest <html> inside the
+    chrome's <body>, so the body is unwrapped when there is one and the head
+    goes with it.
+
+    <script> and <style> are dropped either way. A Tailwind CDN tag inside the
+    There San Diego chrome restyles the whole page, which is the exact failure
+    the chrome exists to stop, and it would arrive looking like a build that
+    worked.
+    """
+    match = _BODY_RE.search(html)
+    if match:
+        html = match.group(1)
+    else:
+        html = re.sub(r"<head\b[^>]*>.*?</head>", "", html, flags=re.IGNORECASE | re.DOTALL)
+        html = re.sub(r"<!DOCTYPE[^>]*>|</?(?:html|head|body)\b[^>]*>", "", html,
+                      flags=re.IGNORECASE)
+    html = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", html, flags=re.IGNORECASE | re.DOTALL)
+    return html.strip()
+
+
+def _story_title(raw_html: str, intel: dict) -> str:
+    """The <title> for a Sponsored Story, given what the model returned.
+
+    The chrome writes the document now, so the model is no longer asked for a
+    title. It may still emit one when it ignores the fragment instruction, and
+    a good one beats anything assembled mechanically: Su Pan's own title did.
+    _editorial_title returns "" for a title it has decided to keep, which is
+    precisely the case where the model's own text is the answer.
+
+    Reads the RAW output, before _story_article strips the head off it, because
+    that is where a <title> would be.
+    """
+    built = _editorial_title(raw_html, intel)
+    if built:
+        return built
+    existing = _first_tag_text(raw_html, "title")
+    if existing:
+        return existing
+    name = (intel.get("business_name") or "").strip()
+    return f"{name} | {PUBLISHER_NAME}" if name else PUBLISHER_NAME
 
 
 def _count_own_domain_links(html: str, domain: str) -> int:
