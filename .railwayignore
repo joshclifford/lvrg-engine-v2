@@ -1,0 +1,19 @@
+# What `railway up` must not try to upload.
+#
+# `railway up` tars the whole working directory. tmp-pytest/ is a pytest
+# scratch dir whose ACLs deny read on Windows, so the compress step aborted
+# with "Access is denied. (os error 5)" and the deploy never started. It is
+# ignored rather than deleted because nothing here needs it either way.
+#
+# The rest are the same things .gitignore keeps out — local-only, rebuilt on
+# the box, and dead weight in the upload.
+tmp-pytest/
+.pytest_cache/
+__pycache__/
+*.pyc
+.venv/
+venv/
+output/
+*.log
+.git/
+tests/
