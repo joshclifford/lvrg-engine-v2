@@ -914,7 +914,7 @@ NO inline style= attributes. Use Tailwind classes exclusively.
 Build a single-file HTML homepage (index.html).
 
 1. CLAIM BAR — sticky, black bg, centered single line:
-   "This site was built for **{intel['business_name']}** by LVRG Agency"
+   "This is a preview of your new website for **{intel['business_name']}**"
    + gold pill "Claim This Site →" button linking to {booking_url}
    Use that URL exactly as written, query string included: the params say which lead and
    which offer the click came from, and a CTA that drops them arrives anonymous.
@@ -1234,7 +1234,7 @@ the same links.
 This is a single HTML page ({page['filename']}), one of {len(nav)} pages in this build.
 
 1. CLAIM BAR — sticky, black bg, centered single line:
-   "This site was built for **{intel['business_name']}** by LVRG Agency"
+   "This is a preview of your new website for **{intel['business_name']}**"
    + gold pill "Claim This Site →" button linking to {booking_url}
    Use that URL exactly as written, query string included: the params say which lead and
    which offer the click came from, and a CTA that drops them arrives anonymous.
@@ -1447,6 +1447,14 @@ def generate_offer_lead_magnet_page(
         role, detail_hint = GET_LISTED_VERTICAL_FRAMING.get(
             vertical, ("a local business", "their services and what makes them worth choosing")
         )
+        # TSD's funnel sells "links to your website, menu, reservations and
+        # social profiles", which only reads right for food. A contractor's page
+        # promising their menu is copy nobody checked.
+        links_point = (
+            "Website, menu, reservations and socials all linked in one place."
+            if vertical in ("restaurant", "cafe")
+            else "Your website and socials all linked in one place."
+        )
         page_purpose = f"""This is a MOCK-UP of how {intel['business_name']}, {role}, would look
 featured in the ThereSanDiego.com business directory, as a personalized preview to close a
 Get Listed ($297 one-time, permanent profile) prospect. Build it around {detail_hint}.
@@ -1455,7 +1463,10 @@ STRUCTURE (this is a directory profile mock-up, not a full website):
 1. CLAIM BAR: sticky, same as every LVRG preview.
    "This is a preview of your ThereSanDiego.com listing" plus gold pill "Claim This Listing →" linking to {booking_url}
 2. PROFILE HEADER: business name, {role} framing, location and neighborhood, primary photo.
-   If a rating was supplied above, show it here as a star stat next to the name.
+   If a rating was supplied above, show it here next to the name in exactly this form: one gold star,
+   the rating, then the review count in brackets, e.g. "★ 4.7 (14 reviews)", or "★ 4.7" with no count.
+   Never a row of stars: 4.7 drawn as five stars overstates it. Use this same form everywhere the
+   rating appears on the page.
 3. ABOUT: 4-6 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice, broken into
    two short paragraphs rather than one block. Work in what they want visitors to do, and speak to
    where they currently struggle, without ever naming the struggle as a criticism of them.
@@ -1477,13 +1488,14 @@ STRUCTURE (this is a directory profile mock-up, not a full website):
 6. WHY LIST HERE: short points, every one of them confirmed on TSD's own funnel.
    Permanent page, no monthly fee, no expiration. Live within 5 business days.
    SEO-optimized so San Diegans searching for what you offer find you.
-   Website, menu, reservations and socials all linked in one place.
+   {links_point}
    Send us your photos and we format and publish them for you.
    Person and business schema, so Google is told who you are as the person behind the business.
 7. WHERE THIS SITS: one short line placing the profile in context, that it lives on a
    local guide 70,000+ San Diegans read every month, not on a pay-to-play directory.
 8. GALLERY: real photos if provided, otherwise omit.
-9. SOCIAL PROOF: if a rating and review count were supplied above, show them as a stat, and
+9. SOCIAL PROOF: if a rating and review count were supplied above, show them as a stat in the same
+   one-star form as the header, and
    nothing more than the stat. Re-read the REVIEWS rule above before writing this section: you
    were given no review text, so this section is two numbers, not a sentence about what anyone said.
    If no rating, omit this section.
@@ -1501,7 +1513,7 @@ Advertising prospect on a Sponsored Story plan, of which LOCAL at $497/month is 
 
 STRUCTURE (this is an editorial feature mock-up, not a full website):
 1. CLAIM BAR: sticky, same as every LVRG preview.
-   "This is a preview of your Sponsored Story" plus gold pill "Claim This Feature →" linking to {booking_url}
+   "This is a preview of your Sponsored Story" plus gold pill "Claim This Story →" linking to {booking_url}
 2. ARTICLE HEADER: a real editorial-style headline about {intel['business_name']}, never a generic
    "About Us" title. Byline "There San Diego Staff", a dateline reading "San Diego", hero photo if provided.
 3. THE STORY: 7-9 paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice, using their

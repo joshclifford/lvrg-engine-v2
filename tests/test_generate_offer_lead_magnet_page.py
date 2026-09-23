@@ -699,3 +699,43 @@ def test_an_oversized_page_warns_instead_of_failing_silently(monkeypatch, capsys
 
     out = capsys.readouterr().out
     assert "preview proxy rejects anything over 5 MB" in out
+
+
+FOOD_LINKS_POINT = "Website, menu, reservations and socials all linked in one place."
+
+
+@pytest.mark.parametrize("vertical", ["realtor", "contractor", "retail", None])
+def test_get_listed_only_promises_menu_and_reservations_to_food(monkeypatch, vertical):
+    # A contractor's live page read "Website, menu, reservations and socials".
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical=vertical)
+
+    prompt = _prompt_text(captured)
+    assert FOOD_LINKS_POINT not in prompt
+    assert "Your website and socials all linked in one place." in prompt
+
+
+@pytest.mark.parametrize("vertical", ["restaurant", "cafe"])
+def test_get_listed_food_keeps_tsd_menu_and_reservations_wording(monkeypatch, vertical):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical=vertical)
+
+    assert FOOD_LINKS_POINT in _prompt_text(captured)
+
+
+def test_get_listed_pins_one_star_rating_format(monkeypatch):
+    # Two live pages drew the rating two ways: five stars for a 5.0, one for a 4.7.
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    generator.generate_offer_lead_magnet_page(
+        "get_listed", _intel(rating=4.7, review_count=14), vertical="contractor"
+    )
+
+    prompt = _prompt_text(captured)
+    assert "★ 4.7 (14 reviews)" in prompt
+    assert "Never a row of stars" in prompt
