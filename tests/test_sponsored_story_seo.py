@@ -349,3 +349,63 @@ def test_the_first_two_words_have_to_be_the_ones_that_match():
     assert generator._headline_names_the_business(
         "How Su Pan Became a City Heights Fixture", "Su Pan Bakery"
     )
+
+
+# ─── The headline on the page ───────────────────────────────────────────────
+#
+# The live articles open on the name: "Josh Taylor, Realtor: The Aussie Agent
+# Who Sells San Diego Block by Block". Felicia Lewis Group shipped as "Inside the
+# Playbook That's Moving Carmel Valley's Priciest Homes" and named nobody, while
+# its <title> already carried the name. The page and the tab now agree.
+
+UNNAMED = ARTICLE.replace(
+    "<h1>Dark Horse Coffee Roasters: A Normal Heights Institution</h1>",
+    "<h1>Inside the Roastery Quietly Supplying Half the Neighborhood</h1>",
+)
+
+
+def _h1(html):
+    return re.search(r"<h1\b[^>]*>(.*?)</h1>", html, re.DOTALL).group(1)
+
+
+def test_the_prompt_asks_for_the_name_first_headline(monkeypatch):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured, html=ARTICLE))
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel(), prospect_id=SLUG)
+    prompt = captured[0]["messages"][0]["content"]
+
+    assert "BUSINESS NAME, WHAT THEY ARE: A HOOK" in prompt
+    assert "Start with their name exactly as written here: Dark Horse Coffee Roasters" in prompt
+    assert "Borrow the form, never their words" in prompt
+
+
+def test_a_headline_missing_the_name_gets_it_on_the_page_too(monkeypatch):
+    html = _build(monkeypatch, html=UNNAMED)
+
+    assert _h1(html) == "Dark Horse Coffee Roasters: Inside the Roastery Quietly Supplying Half the Neighborhood"
+    # Shared, not just shown: the share card and the structured data say the same.
+    assert _meta(html, "property", "og:title") == _h1(html)
+    assert _json_ld(html)["headline"] == _h1(html)
+
+
+def test_a_headline_that_names_the_business_is_left_as_the_model_wrote_it(monkeypatch):
+    html = _build(monkeypatch)
+    assert _h1(html) == "Dark Horse Coffee Roasters: A Normal Heights Institution"
+
+    short = ARTICLE.replace(
+        "<h1>Dark Horse Coffee Roasters: A Normal Heights Institution</h1>",
+        "<h1>How Dark Horse Turned Coffee Into a Ritual</h1>",
+    )
+    assert _h1(_build(monkeypatch, html=short)) == "How Dark Horse Turned Coffee Into a Ritual"
+
+
+def test_a_name_with_an_ampersand_is_escaped_in_the_headline(monkeypatch):
+    html = _build(monkeypatch, html=UNNAMED, intel=_intel(business_name="Smith & Sons"))
+
+    assert _h1(html).startswith("Smith &amp; Sons: Inside the Roastery")
+
+
+def test_get_listed_keeps_its_own_headline(monkeypatch):
+    html = _build(monkeypatch, offer="get_listed", html=UNNAMED)
+
+    assert _h1(html) == "Inside the Roastery Quietly Supplying Half the Neighborhood"

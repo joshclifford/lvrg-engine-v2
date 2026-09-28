@@ -808,6 +808,28 @@ def _headline_names_the_business(headline: str, name: str) -> bool:
     return len(words) >= 2 and " ".join(words[:2]) in headline.lower()
 
 
+_H1_OPEN_RE = re.compile(r"<h1\b[^>]*>", re.IGNORECASE)
+
+
+def _name_the_headline(article: str, intel: dict) -> str:
+    """Start the story's <h1> with the business name when the model left it out.
+
+    The live ThereSanDiego articles open on the name ("Josh Taylor, Realtor:
+    ..."), so the owner sees themselves before anything else. The prompt asks
+    for that form, and asking is not the same as knowing: Felicia Lewis Group
+    shipped as "Inside the Playbook That's Moving Carmel Valley's Priciest
+    Homes", naming nobody. The same test _editorial_title uses for the <title>,
+    so a headline carrying the short form ("How Dark Horse Turned...") is left
+    alone and the name never appears twice.
+    """
+    name = (intel.get("business_name") or "").strip()
+    headline = _first_tag_text(article, "h1")
+    if not name or not headline or _headline_names_the_business(headline, name):
+        return article
+    opening = _H1_OPEN_RE.search(article)
+    return f"{article[:opening.end()]}{escape(name, quote=False)}: {article[opening.end():]}"
+
+
 def _editorial_title(html: str, intel: dict) -> str:
     """A real title for this page, or "" to leave the model's own alone.
 
@@ -1518,7 +1540,19 @@ what you write. Write the article and nothing else.
 
 WRITE EXACTLY THIS, IN THIS ORDER, WITH THESE EXACT CLASS NAMES:
 
-1. <h1>: a real editorial headline about {intel['business_name']}, never a generic "About Us" title.
+1. <h1>: the headline, in the form the live ThereSanDiego articles use:
+   BUSINESS NAME, WHAT THEY ARE: A HOOK
+   - Start with their name exactly as written here: {intel['business_name']}
+   - Then a comma and what they are in two to four plain words, drawn from their real description
+     and services, with their neighborhood when it fits, for example "Carmel Valley Realtors" or
+     "North Park Coffee Roaster". Leave this part out when the name already says it: "Su Pan
+     Bakery: ...", never "Su Pan Bakery, Bakery: ...".
+   - Then a colon and a short editorial hook built ONLY on the facts given above: what they do
+     best, where they work, how they started. No rankings, awards, numbers or superlatives
+     ("best", "top", "#1") unless the intel above states them. One colon in the whole headline.
+   The form, shown on real published headlines: "Josh Taylor, Realtor: The Aussie Agent Who Sells
+   San Diego Block by Block" and "Su Pan Bakery: The City Heights Bakery Keeping Tradition Fresh".
+   Borrow the form, never their words. Never a generic "About Us" title.
 2. <div class="tsd-byline">By <strong>There San Diego Staff</strong> &middot; San Diego</div>
 3. The hero photo if one was supplied: <img class="tsd-hero" src="..." alt="...">
 4. THE STORY: 7-9 paragraphs in ThereSanDiego's warm, locals-know-locals editorial voice, using their
@@ -1714,6 +1748,10 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
     # with two backlinks, og:image would be the There San Diego logo, and the
     # Google snippet would be the disclosure instead of the story.
     article = _story_article(html) if offer == "sponsored_story" else html
+    if offer == "sponsored_story":
+        # Before the SEO read, so og:title and the structured data carry the
+        # same headline the page shows.
+        article = _name_the_headline(article, intel)
 
     # Count the backlinks BEFORE photo inlining, so a base64 blob containing the
     # domain by coincidence cannot inflate the number.
