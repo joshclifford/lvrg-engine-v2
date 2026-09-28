@@ -65,19 +65,22 @@ def _prompt_for(monkeypatch, offer, prospect_id=""):
     return _prompt_text(captured)
 
 
-def test_both_magnet_prompts_carry_the_attributed_link(monkeypatch):
-    for offer in ("get_listed", "sponsored_story"):
-        prompt = _prompt_for(monkeypatch, offer, "poppieco-com")
-        assert f"utm_medium={offer}" in prompt
-        assert "lead_id=poppieco-com" in prompt
+def test_the_get_listed_prompt_carries_the_attributed_link(monkeypatch):
+    """Sponsored Story is left out on purpose: its claim bar, plans and buttons
+    are fixed markup, and the story prompt carries no booking link at all
+    (test_sponsored_story_chrome.py) so the model cannot put one in the article."""
+    prompt = _prompt_for(monkeypatch, "get_listed", "poppieco-com")
+    assert "utm_medium=get_listed" in prompt
+    assert "lead_id=poppieco-com" in prompt
 
 
 def test_the_magnet_prompt_never_offers_the_bare_url_as_an_alternative(monkeypatch):
     """The prompt names the booking page in several places. If any one of them
     still showed the bare URL, the model could satisfy the instruction with an
     unattributed link and be technically right."""
-    prompt = _prompt_for(monkeypatch, "sponsored_story", "poppieco-com")
+    prompt = _prompt_for(monkeypatch, "get_listed", "poppieco-com")
     bare = "https://theresandiego.com/letschat"
+    assert bare in prompt
     # Every mention should be the attributed form: same count of "?" suffixed
     # occurrences as of the URL itself.
     assert prompt.count(bare) == prompt.count(bare + "?")

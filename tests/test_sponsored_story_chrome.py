@@ -192,3 +192,53 @@ def test_the_fact_panel_omits_a_row_rather_than_printing_not_listed(monkeypatch)
     assert "Address" not in panel
     # What we do hold still ships.
     assert "https://darkhorsecoffeeroasters.com" in panel
+
+
+# ── links inside the story go to the business, not to us ───────────────────
+
+def test_a_booking_link_inside_the_story_goes_to_their_site_instead(monkeypatch, capsys):
+    """Felicia Lewis Group, 28 Sep: the closing line linked "a free home
+    valuation or listing strategy consultation" to our /letschat sales page.
+    The claim bar and plans still carry our link; the article does not."""
+    import config
+
+    slug = "darkhorsecoffeeroasters-com---sponsored-story"
+    tracked = config.build_booking_url("sponsored_story", slug)
+    story = FRAGMENT.replace(
+        '<p>Visit <a href="https://darkhorsecoffeeroasters.com">their site</a> to order a bag.</p>',
+        '<p>Start with <a href="https://theresandiego.com/letschat">a free tasting</a> or '
+        f'<a href="{tracked.replace("&", "&amp;")}">a wholesale call</a>.</p>',
+    )
+    html, _ = _build(monkeypatch, html=story)
+
+    article = html[html.index('<article class="tsd-article">'):html.index("</article>")]
+    assert "letschat" not in article
+    assert '<a href="https://darkhorsecoffeeroasters.com">a free tasting</a>' in article
+    assert '<a href="https://darkhorsecoffeeroasters.com">a wholesale call</a>' in article
+    # Outside the article, our buttons still go to our booking page.
+    assert html.count(tracked.replace("&", "&amp;")) + html.count(tracked) >= 1
+    assert "linked our booking page 2 time(s)" in capsys.readouterr().out
+
+
+def test_other_there_san_diego_links_in_the_story_are_left_alone():
+    html = '<p><a href="https://theresandiego.com/advertise/">Advertise</a></p>'
+    out = generator._story_links_to_their_site(html, "https://acme.com", "Acme")
+    assert out == html
+
+
+def test_the_story_prompt_never_hands_the_model_our_booking_link(monkeypatch):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured, html=FRAGMENT))
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel())
+
+    prompt = _prompt_text(captured)
+    assert "letschat" not in prompt
+    assert "OUR BOOKING PAGE: NOT in this article" in prompt
+
+
+def test_get_listed_still_gets_the_booking_link_for_its_buttons(monkeypatch):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+    generator.generate_offer_lead_magnet_page("get_listed", _intel())
+
+    assert "theresandiego.com/letschat?" in _prompt_text(captured)

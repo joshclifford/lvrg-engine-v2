@@ -1622,6 +1622,15 @@ Anything you style yourself will look like a different website sitting inside th
         output_rule = """━━━ OUTPUT ━━━
 Return ONLY the article markup, as an HTML FRAGMENT starting with <h1>. No explanation, no markdown
 fences, no <!DOCTYPE>, no <html>, <head>, <body>, <title>, <style> or <script>, and no chat widget."""
+        # No booking URL in this prompt at all. The claim bar, plan cards and
+        # buttons that carry it are fixed markup around the article, so the
+        # model never needs it, and when it was given it anyway it linked the
+        # story's closing "free home valuation" to our sales page (Felicia
+        # Lewis Group, 28 Sep).
+        booking_link_rule = f"""2. OUR BOOKING PAGE: NOT in this article. This is OUR link, not theirs.
+   The claim bar, the plan cards and every button that carries it are built around you. Inside the
+   story, EVERY link goes to {own_site_url}. A reader who clicks "book a consultation" or "get a
+   free valuation" expects to reach the business, not There San Diego."""
     else:
         tech_stack = f"""━━━ TECH STACK ━━━
 Use Tailwind CSS via CDN. Include this in <head>:
@@ -1632,6 +1641,13 @@ NO inline style= attributes. Use Tailwind classes exclusively."""
         output_rule = """━━━ OUTPUT ━━━
 Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).
 Start with <!DOCTYPE html>"""
+        booking_link_rule = f"""2. THE BOOKING PAGE: {booking_url}
+   For the claim bar, the CTA buttons and the plan cards ONLY. This is OUR link, not theirs.
+   It must never replace a link to their own website, and adding more of these does not satisfy
+   the requirement above.
+   Use this URL EXACTLY as written, query string included. The params after the "?" say which
+   lead and which offer the click came from, and a CTA that drops them arrives anonymous.
+   Do not shorten it, do not strip it back to the bare domain, do not vary it between buttons."""
 
 
     page_prompt = f"""You are building a personalized lead-magnet PREVIEW PAGE for {intel['business_name']}.
@@ -1677,13 +1693,7 @@ Two different destinations. Do not confuse them, and do not let one stand in for
    Never example.com, never "#", never a link to ThereSanDiego instead.
    Style them as ordinary editorial links. Never rel="nofollow": the link counting is the point.
 
-2. THE BOOKING PAGE: {booking_url}
-   For the claim bar, the CTA buttons and the plan cards ONLY. This is OUR link, not theirs.
-   It must never replace a link to their own website, and adding more of these does not satisfy
-   the requirement above.
-   Use this URL EXACTLY as written, query string included. The params after the "?" say which
-   lead and which offer the click came from, and a CTA that drops them arrives anonymous.
-   Do not shorten it, do not strip it back to the bare domain, do not vary it between buttons.
+{booking_link_rule}
 
 Socials, if supplied, go in the footer. They are additional, not a substitute for the website link.
 
@@ -1752,6 +1762,9 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
         # Before the SEO read, so og:title and the structured data carry the
         # same headline the page shows.
         article = _name_the_headline(article, intel)
+        # Before the backlink count: the link it produces is a real one to
+        # their site, pointing where the reader expected to go.
+        article = _story_links_to_their_site(article, own_site_url, intel.get("business_name", ""))
 
     # Count the backlinks BEFORE photo inlining, so a base64 blob containing the
     # domain by coincidence cannot inflate the number.
@@ -1876,6 +1889,38 @@ def _story_article(html: str) -> str:
                       flags=re.IGNORECASE)
     html = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", html, flags=re.IGNORECASE | re.DOTALL)
     return html.strip()
+
+
+def _story_links_to_their_site(article: str, own_site_url: str, business_name: str) -> str:
+    """Point any booking link inside the story at the business's own site.
+
+    The story's closing line on Felicia Lewis Group's page (28 Sep) linked "a
+    free home valuation or listing strategy consultation" to our /letschat
+    sales page. A reader who clicks that wants the business, and landing on
+    There San Diego's pitch instead makes the article read as our ad. The
+    booking page belongs in the claim bar, plans and buttons, which are fixed
+    markup outside the article, so no link to it inside the article is right.
+
+    Rewritten rather than unlinked: the phrase is always one of theirs (a
+    consultation, a valuation, a table), so their site is where it leads.
+    """
+    rewritten = 0
+
+    def _swap(match: "re.Match") -> str:
+        nonlocal rewritten
+        prefix, quote, href = match.group(1), match.group(2), match.group(3)
+        if not _is_booking_href(href.replace("&amp;", "&")):
+            return match.group(0)
+        rewritten += 1
+        return f"{prefix}{quote}{own_site_url}{quote}"
+
+    article = _HREF_RE.sub(_swap, article)
+    if rewritten:
+        print(
+            f"  [generator] WARNING: sponsored_story for {business_name} linked our booking "
+            f"page {rewritten} time(s) inside the story; pointed at {own_site_url} instead."
+        )
+    return article
 
 
 def _story_title(raw_html: str, intel: dict) -> str:
