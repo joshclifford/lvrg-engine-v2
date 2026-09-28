@@ -1,6 +1,6 @@
-"""Social profiles: read off the prospect's own page, searched for when it
-links none, and shown as the profile card the live There San Diego article
-carries.
+"""Social profiles: read off the prospect's own page, and searched for when it
+links none. The posts the Sponsored Story shows from them are pinned in
+test_story_posts.py.
 
 Nothing gathered socials before. The only source was api.py merging Apify's
 three columns, so a lead Apify had nothing for shipped a Sponsored Story with
@@ -17,7 +17,6 @@ import pytest
 
 import api
 import intel
-import tsd_theme
 
 
 # ── what counts as a profile ─────────────────────────────────────────────────
@@ -141,58 +140,3 @@ def test_the_apps_socials_merge_with_the_scrape_instead_of_replacing_them():
         "instagram_url": "https://www.instagram.com/from_apify",
         "tiktok_url": "https://www.tiktok.com/@theirs",
     }
-
-
-# ── the card ─────────────────────────────────────────────────────────────────
-
-def test_the_card_names_the_account_it_links_to():
-    """The handle on the card and the href behind the button have to be the same
-    account. This is why the card is built here and not by the model."""
-    card = tsd_theme.social_card({
-        "socials": {"instagram_url": "https://www.instagram.com/lobsterlab.us"},
-        "neighborhood": "Del Mar",
-    })
-
-    assert 'href="https://www.instagram.com/lobsterlab.us"' in card
-    assert ">lobsterlab.us<" in card
-    assert "Del Mar" in card
-    assert "View profile" in card
-
-
-def test_instagram_wins_when_there_are_several():
-    """One card, for the platform the live page embeds. The rest stay in the
-    sidebar, which is where the live page keeps them too."""
-    card = tsd_theme.social_card({"socials": {
-        "facebook_url": "https://www.facebook.com/theirs",
-        "instagram_url": "https://www.instagram.com/theirs",
-    }})
-
-    assert "instagram.com/theirs" in card
-    assert "facebook.com" not in card
-
-
-def test_no_socials_means_no_card_rather_than_an_empty_one():
-    assert tsd_theme.social_card({"socials": {}}) == ""
-    assert tsd_theme.social_card({}) == ""
-
-
-def test_the_card_lands_after_the_second_paragraph_like_the_live_page():
-    article = ("<h1>H</h1>\n<p>one</p>\n\n<p>two</p>\n\n<h2>Sub</h2>\n<p>three</p>")
-    out = tsd_theme.insert_social_card(
-        article, {"socials": {"instagram_url": "https://www.instagram.com/theirs"}})
-
-    assert out.index("<p>two</p>") < out.index("tsd-embed") < out.index("<h2>Sub</h2>")
-
-
-def test_a_short_story_puts_the_card_under_the_hero_not_above_the_headline():
-    article = '<h1>H</h1>\n<img class="tsd-hero" src="a.jpg" alt="">\n<p>only one</p>'
-    out = tsd_theme.insert_social_card(
-        article, {"socials": {"instagram_url": "https://www.instagram.com/theirs"}})
-
-    assert out.index("tsd-hero") < out.index("tsd-embed") < out.index("<p>only one</p>")
-
-
-def test_an_article_with_no_socials_is_returned_untouched():
-    article = "<h1>H</h1><p>one</p><p>two</p>"
-
-    assert tsd_theme.insert_social_card(article, {"socials": {}}) == article

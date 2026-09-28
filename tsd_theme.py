@@ -37,6 +37,7 @@ invent local events would invent local events.
 
 import re
 from html import escape
+from urllib.parse import urlparse
 
 TSD_HOME = "https://theresandiego.com"
 TSD_LOGO = f"{TSD_HOME}/wp-content/uploads/mobile_logo-1.png"
@@ -192,15 +193,13 @@ _ICONS = {
     "youtube": '<path d="M21.58 7.19a2.51 2.51 0 0 0-1.77-1.78C18.25 5 12 5 12 5s-6.25 0-7.81.41a2.51 2.51 0 0 0-1.77 1.78A26.2 26.2 0 0 0 2 12a26.2 26.2 0 0 0 .42 4.81 2.51 2.51 0 0 0 1.77 1.78C5.75 19 12 19 12 19s6.25 0 7.81-.41a2.51 2.51 0 0 0 1.77-1.78A26.2 26.2 0 0 0 22 12a26.2 26.2 0 0 0-.42-4.81zM10 15.02V8.98L15.2 12 10 15.02z"/>',
 }
 
-# The card the article carries, per platform. Instagram first because that is
-# the one the live page embeds and the one the search fallback hunts for.
-_EMBED_ORDER = ["instagram_url", "facebook_url", "tiktok_url", "youtube_url", "linkedin_url"]
-_EMBED_LABEL = {
-    "instagram_url": ("instagram", "View profile"),
-    "facebook_url": ("facebook", "View page"),
-    "tiktok_url": ("tiktok", "View profile"),
-    "youtube_url": ("youtube", "View channel"),
-    "linkedin_url": ("linkedin", "View profile"),
+# Each platform's own embed script, loaded once per page for the platforms
+# whose posts it carries. Instagram's is the one the live article loads.
+_EMBED_SCRIPTS = {
+    "instagram": '<script async src="https://www.instagram.com/embed.js"></script>',
+    "facebook": ('<div id="fb-root"></div>\n<script async defer crossorigin="anonymous" '
+                 'src="https://connect.facebook.net/en_US/sdk.js#xfbml=1&amp;version=v23.0"></script>'),
+    "tiktok": '<script async src="https://www.tiktok.com/embed.js"></script>',
 }
 
 
@@ -267,6 +266,15 @@ h1,h2,h3,h4,h5,h6{font-family:'Oswald',Arial,sans-serif;font-weight:400;color:#4
 .tsd-embed-where{font-family:'Roboto',Arial,sans-serif;font-size:12px;font-weight:400;color:#8e8e8e;line-height:1.4}
 .tsd-embed a.tsd-embed-btn{flex:0 0 auto;background:#0095f6;color:#fff;font-family:'Roboto',Arial,sans-serif;font-size:13px;font-weight:600;text-decoration:none;padding:7px 14px;border-radius:8px;white-space:nowrap}
 .tsd-embed a.tsd-embed-btn:hover{background:#1877f2}
+
+.tsd-article .tsd-post{margin:34px auto;max-width:540px}
+.tsd-article .tsd-post-video{max-width:none;position:relative;aspect-ratio:16/9}
+.tsd-post-video iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}
+.tsd-sitepost{border:1px solid #dbdbdb;border-radius:3px;background:#fff;overflow:hidden}
+.tsd-sitepost .tsd-embed{border:0;border-radius:0;margin:0}
+.tsd-sitepost .tsd-embed-avatar{background:#da195b}
+.tsd-article .tsd-sitepost img{max-height:600px;object-fit:cover}
+.tsd-article .tsd-sitepost a.tsd-sitepost-more{display:block;border-top:1px solid #efefef;padding:12px 16px;font-family:'Roboto',Arial,sans-serif;font-size:13px;color:#00376b;text-decoration:none}
 
 .tsd-widget{margin-bottom:44px}
 .tsd-widget-title{border-bottom:1px solid #e4e4e4;padding-bottom:11px;margin-bottom:20px}
@@ -458,64 +466,135 @@ def upcoming_events() -> str:
 </div>"""
 
 
-def social_card(intel: dict) -> str:
-    """The profile card the live article carries: handle, where they are, and a
-    View profile button that opens their account.
+def _permalink(url: str) -> str:
+    """A post URL with its tracking query and fragment cut off."""
+    return url.split("#", 1)[0].split("?", 1)[0]
 
-    Server-side and deterministic, not something the model writes. The handle
-    and the href have to be the same account, and a model that produced this
-    block would be producing a link to a real person's Instagram from memory.
 
-    One card, for the best profile we hold. The rest stay in the sidebar, which
-    is where the live page keeps them too.
+def post_embed(post: dict) -> str:
+    """One real post, in the platform's own embed markup.
+
+    Server-side and deterministic, never written by the model: every link here
+    came back from the platform itself, so a post can never be one the model
+    remembered or made up. The fallback inside each blockquote is the link the
+    platform's own embed code carries, and it is what shows if their script is
+    blocked.
     """
-    socials = {k: v for k, v in (intel.get("socials") or {}).items() if v}
-    key = next((k for k in _EMBED_ORDER if k in socials), None)
-    if not key:
+    platform = post.get("platform")
+    url = post.get("url") or ""
+    if not url.startswith("https://"):
         return ""
-
-    url = socials[key]
-    icon, action = _EMBED_LABEL[key]
-    handle = url.rstrip("/").rsplit("/", 1)[-1]
-    if not handle:
-        return ""
-    if key == "instagram_url":
-        handle = handle.lstrip("@")
-    where = intel.get("neighborhood") or (intel.get("location") or "").split(",")[0] or ""
-    where_line = f'<div class="tsd-embed-where">{_e(where)}</div>' if where else ""
-
-    return f"""<div class="tsd-embed">
-  <span class="tsd-embed-avatar">{_icon(icon, 22)}</span>
-  <div class="tsd-embed-who">
-    <div class="tsd-embed-handle">{_e(handle)}</div>
-    {where_line}
-  </div>
-  <a class="tsd-embed-btn" href="{_e(url)}" target="_blank" rel="noopener">{action}</a>
+    if platform == "instagram":
+        link = _e(_permalink(url) + "?utm_source=ig_embed")
+        return f"""<div class="tsd-post">
+<blockquote class="instagram-media" data-instgrm-permalink="{link}" data-instgrm-version="14" style="background:#fff;border:0;border-radius:3px;box-shadow:0 0 1px 0 rgba(0,0,0,.5),0 1px 10px 0 rgba(0,0,0,.15);margin:0 auto;max-width:540px;min-width:326px;padding:0;width:100%"><a href="{link}" target="_blank" rel="noopener">View this post on Instagram</a></blockquote>
 </div>"""
+    if platform == "facebook":
+        link = _e(url)
+        return f"""<div class="tsd-post">
+<div class="fb-post" data-href="{link}" data-width="500" data-show-text="true"><blockquote cite="{link}" class="fb-xfbml-parse-ignore"><a href="{link}" target="_blank" rel="noopener">View this post on Facebook</a></blockquote></div>
+</div>"""
+    if platform == "tiktok" and post.get("embed_id"):
+        link = _e(_permalink(url))
+        return f"""<div class="tsd-post">
+<blockquote class="tiktok-embed" cite="{link}" data-video-id="{_e(post['embed_id'])}" style="max-width:605px;min-width:325px;margin:0 auto"><section><a href="{link}" target="_blank" rel="noopener">View this video on TikTok</a></section></blockquote>
+</div>"""
+    if platform == "youtube" and post.get("embed_id"):
+        return f"""<div class="tsd-post tsd-post-video">
+<iframe src="https://www.youtube-nocookie.com/embed/{_e(post['embed_id'])}" title="Video on YouTube" loading="lazy" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+</div>"""
+    return ""
 
 
-# Where the live page puts it: two paragraphs of story, then the account, then
-# the first subheading. Not a regex over both closing tags at once — they are
-# separated by a blank line and a paragraph of copy, so a `(</p>\s*){2}` pattern
-# matches nothing and silently falls through to the hero branch below.
+def post_scripts(posts: list) -> str:
+    """Each embed script once, for the platforms these posts are on."""
+    used = []
+    for post in posts:
+        platform = post.get("platform")
+        if platform in _EMBED_SCRIPTS and platform not in used:
+            used.append(platform)
+    return "\n".join(_EMBED_SCRIPTS[p] for p in used)
+
+
+def photo_card(photo_url: str, intel: dict) -> str:
+    """A photo off the business's own website, set like a post: their name on
+    top, the photo, and a link to their site. Used when no social post can be
+    shown. A click anywhere opens their website."""
+    site = intel.get("page_url") or (f"https://{intel['domain']}" if intel.get("domain") else "")
+    if not photo_url or not site:
+        return ""
+    name = intel.get("business_name") or intel.get("domain") or ""
+    shown = (intel.get("domain") or urlparse(site).hostname or site).removeprefix("www.")
+    link = f'href="{_e(site)}" target="_blank" rel="noopener"'
+    return f"""<figure class="tsd-post tsd-sitepost">
+  <div class="tsd-embed">
+    <span class="tsd-embed-avatar">{_icon('website', 22)}</span>
+    <div class="tsd-embed-who">
+      <div class="tsd-embed-handle">{_e(name)}</div>
+      <div class="tsd-embed-where">{_e(shown)}</div>
+    </div>
+    <a class="tsd-embed-btn" {link}>Visit website</a>
+  </div>
+  <a {link}><img src="{_e(photo_url)}" alt="A photo from {_e(name)}" loading="lazy"></a>
+  <a class="tsd-sitepost-more" {link}>View more on {_e(shown)}</a>
+</figure>"""
+
+
+# A </p> inside the pull quote, the fact box, a figure or a quote is not the end
+# of a story paragraph, and a post dropped there would land inside that block.
 _PARAGRAPH_END = re.compile(r"</p>", re.IGNORECASE)
+_INNER_BLOCKS = re.compile(
+    r"""<div\b[^>]*\bclass=["'][^"']*tsd-(?:pullquote|factbox)[^"']*["'][^>]*>.*?</div>"""
+    r"""|<(figure|blockquote)\b.*?</\1>""",
+    re.IGNORECASE | re.DOTALL,
+)
+_SUBHEADING = re.compile(r"<h2\b", re.IGNORECASE)
 _HERO_IMG = re.compile(r"""<img\b[^>]*\bclass=["'][^"']*tsd-hero[^"']*["'][^>]*>""", re.IGNORECASE)
 
 
-def insert_social_card(article: str, intel: dict) -> str:
-    """Drop the profile card into the article at the live page's own rhythm."""
-    card = social_card(intel)
-    if not card:
+def _story_paragraph_ends(article: str) -> list:
+    inside = [m.span() for m in _INNER_BLOCKS.finditer(article)]
+    return [m.end() for m in _PARAGRAPH_END.finditer(article)
+            if not any(a < m.start() < b for a, b in inside)]
+
+
+def insert_story_posts(article: str, blocks: list, scripts: str = "") -> str:
+    """Place up to two posts where the live article puts them.
+
+    The first after two paragraphs of story, where the profile card used to
+    sit. The second later on, before a subheading with at least two paragraphs
+    between the two, so they never sit side by side in a long story. A story
+    too short for that gets them one after the other.
+    """
+    blocks = [b for b in blocks if b][:2]
+    if not blocks:
         return article
 
-    ends = [m.end() for m in _PARAGRAPH_END.finditer(article)]
+    ends = _story_paragraph_ends(article)
     if len(ends) >= 2:
-        at = ends[1]
+        first = ends[1]
     else:
         # A very short story: after the hero if there is one, else on top.
         hero = _HERO_IMG.search(article)
-        at = hero.end() if hero else 0
-    return article[:at] + "\n" + card + "\n" + article[at:]
+        first = hero.end() if hero else 0
+    positions = [first]
+
+    if len(blocks) > 1:
+        later = [e for e in ends if e > first]
+        second = first
+        if len(later) >= 2:
+            heading = next((m.start() for m in _SUBHEADING.finditer(article) if m.start() >= later[1]), None)
+            if heading is not None:
+                second = heading
+            elif len(later) >= 3:
+                second = later[len(later) // 2]
+        positions.append(second)
+
+    # Last first, so the earlier position still points at the same place. On a
+    # shared position the first block then lands in front of the second.
+    for at, block in reversed(list(zip(positions, blocks))):
+        article = article[:at] + "\n" + block + "\n" + article[at:]
+    return article + ("\n" + scripts if scripts else "")
 
 
 def sales_block(booking_url: str, business_name: str) -> str:
