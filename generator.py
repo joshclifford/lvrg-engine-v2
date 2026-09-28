@@ -1782,6 +1782,9 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
     if offer == "sponsored_story":
         article, photo_assets = _place_story_posts(
             article, intel, photo_assets, social_posts.collect(social_job))
+        # After the posts, which are placed by counting paragraphs, and after
+        # the backlink count, which a social url must not feed.
+        article = tsd_theme.insert_follow_row(article, intel)
 
     article = _inline_photo_assets(article, photo_assets)
 
