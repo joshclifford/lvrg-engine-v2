@@ -288,6 +288,14 @@ h1,h2,h3,h4,h5,h6{font-family:'Oswald',Arial,sans-serif;font-weight:400;color:#4
 .tsd-dd a{color:#888;text-decoration:none}
 .tsd-dd a:hover{color:#da195b}
 
+.tsd-social{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tsd-social a.tsd-social-icon{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:#da195b;text-decoration:none}
+.tsd-social a.tsd-social-icon:hover{background:#b3124a}
+.tsd-social a.tsd-social-icon svg{fill:#fff;margin:0}
+.tsd-factbox li.tsd-follow{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:14px 0 0}
+.tsd-follow-strip{display:flex;flex-wrap:wrap;align-items:center;gap:12px;border-top:1px solid #e4e4e4;padding-top:20px;margin:36px 0 0}
+.tsd-follow-strip strong{font-family:'Oswald',Arial,sans-serif;font-size:18px;font-weight:500;color:#4a4a4a}
+
 .tsd-hot{display:flex;gap:14px;align-items:center;margin-bottom:18px}
 .tsd-hot img{flex:0 0 78px;width:78px;height:60px;object-fit:cover}
 .tsd-hot a{font-family:'Oswald',Arial,sans-serif;font-size:18px;font-weight:400;line-height:23.4px;text-transform:uppercase;color:#222;text-decoration:none}
@@ -386,6 +394,88 @@ def disclosure() -> str:
     return f'<div class="tsd-disclosure">{DISCLOSURE}</div>'
 
 
+# The platforms we can draw, in the order they show, with the name a reader
+# knows them by. The old row printed key.title(), which spelt "Youtube" and
+# "Linkedin", and put plain grey words where a reader looks for icons.
+_SOCIAL_PLATFORMS = [
+    ("instagram_url", "instagram", "Instagram"),
+    ("facebook_url", "facebook", "Facebook"),
+    ("tiktok_url", "tiktok", "TikTok"),
+    ("youtube_url", "youtube", "YouTube"),
+    ("linkedin_url", "linkedin", "LinkedIn"),
+]
+
+_HTTP_URL = re.compile(r"https?://", re.IGNORECASE)
+
+
+def _social_links(intel: dict) -> list:
+    """(icon, name, url) for every social we hold, in platform order.
+
+    Only http(s) addresses: these land in an href, and the app's values come
+    from a scrape. A bare "instagram.com/x" gets https:// rather than being
+    read as a path on the preview's own host.
+    """
+    socials = intel.get("socials") or {}
+    links = []
+    for key, icon, name in _SOCIAL_PLATFORMS:
+        url = str(socials.get(key) or "").strip()
+        if url and not _HTTP_URL.match(url):
+            url = f"https://{url}" if "." in url.split("/")[0] and ":" not in url else ""
+        if url:
+            links.append((icon, name, url))
+    return links
+
+
+def social_icons(intel: dict) -> str:
+    """A row of round icon links, one per social we hold. Empty when none.
+
+    Fixed markup built from intel, never the model's: a social link the model
+    wrote could be somebody else's account.
+    """
+    links = _social_links(intel)
+    if not links:
+        return ""
+    who = intel.get("business_name") or "this business"
+    anchors = "".join(
+        f'<a class="tsd-social-icon" href="{_e(url)}" target="_blank" rel="noopener" '
+        f'title="{_e(name)}" aria-label="{_e(f"{who} on {name}")}">{_icon(icon, 16)}</a>'
+        for icon, name, url in links
+    )
+    return f'<span class="tsd-social">{anchors}</span>'
+
+
+_FACTBOX = re.compile(
+    r"""<div\b[^>]*\bclass=["'][^"']*tsd-factbox[^"']*["'][^>]*>.*?</div>""",
+    re.IGNORECASE | re.DOTALL,
+)
+_LAST_UL_CLOSE = re.compile(r"</ul>(?!.*</ul>)", re.IGNORECASE | re.DOTALL)
+
+
+def insert_follow_row(article: str, intel: dict) -> str:
+    """Put the business's socials at the end of the story (POD01-238).
+
+    As the last line of The Details box when the model wrote one, otherwise as
+    a small strip after the last paragraph, so a reader who finishes the story
+    has somewhere to follow them. No socials, no row.
+    """
+    icons = social_icons(intel)
+    if not icons:
+        return article
+
+    box = _FACTBOX.search(article)
+    if box:
+        row = f'<li class="tsd-follow"><strong>Follow:</strong> {icons}</li>'
+        inner = box.group(0)
+        if _LAST_UL_CLOSE.search(inner):
+            inner = _LAST_UL_CLOSE.sub(lambda m: row + "</ul>", inner, count=1)
+        else:
+            inner = inner[:-len("</div>")] + f"<ul>{row}</ul></div>"
+        return article[:box.start()] + inner + article[box.end():]
+
+    name = _e(intel.get("business_name") or "them")
+    return article.rstrip() + f'\n<div class="tsd-follow-strip"><strong>Follow {name}</strong> {icons}</div>\n'
+
+
 def business_details(intel: dict) -> str:
     """The "Business Details" panel, built only from data we actually hold.
 
@@ -411,14 +501,9 @@ def business_details(intel: dict) -> str:
     if site:
         rows.append(("website", "Website",
                      f'<a href="{_e(site)}" target="_blank" rel="noopener">{_e(site)}</a>'))
-    socials = {k: v for k, v in (intel.get("socials") or {}).items() if v}
-    if socials:
-        links = " ".join(
-            f'<a href="{_e(url)}" target="_blank" rel="noopener">'
-            f'{_e(key.replace("_url", "").title())}</a>'
-            for key, url in socials.items()
-        )
-        rows.append(("social", "Social", links))
+    icons = social_icons(intel)
+    if icons:
+        rows.append(("social", "Social", icons))
 
     items = "\n".join(
         f"""    <li>{_icon(icon, 26)}<div>
