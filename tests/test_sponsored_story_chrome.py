@@ -132,35 +132,17 @@ def test_a_model_that_writes_a_whole_document_anyway_is_unwrapped(monkeypatch):
     assert "Tucked into a quiet stretch of Adams Avenue" in html
 
 
-# ── the social profile card ──────────────────────────────────────────────────
+# ── the post section (POD01-239, more in test_story_posts.py) ────────────────
 
-def test_the_finished_story_carries_the_profile_card(monkeypatch):
-    """The live article embeds the business's Instagram, and clicking through
-    opens their account. Built server-side, never by the model: the handle on
-    the card and the href behind the button have to be the same account."""
+def test_a_lead_with_nothing_to_show_gets_no_post_section(monkeypatch):
+    """No posts and no spare website photo: no section at all, and no profile
+    card standing in for one."""
     intel = _intel(socials={"instagram_url": "https://www.instagram.com/darkhorsesd"})
     html, _ = _build(monkeypatch, intel=intel)
 
-    assert 'href="https://www.instagram.com/darkhorsesd"' in html
-    assert ">darkhorsesd<" in html
-    assert "View profile" in html
-
-
-def test_a_lead_with_no_socials_gets_no_card(monkeypatch):
-    html, _ = _build(monkeypatch, intel=_intel(socials={}))
-
-    # The class name is still in the stylesheet; what must be absent is markup.
-    assert '<div class="tsd-embed">' not in html
+    # The class names are still in the stylesheet; what must be absent is markup.
+    assert 'class="tsd-post' not in html
     assert "View profile" not in html
-
-
-def test_the_card_is_not_mistaken_for_the_story_photo(monkeypatch):
-    """The card is inserted after og:image is read. A social url landing in
-    og:image would put an Instagram logo on every share of the story."""
-    intel = _intel(socials={"instagram_url": "https://www.instagram.com/darkhorsesd"})
-    html, _ = _build(monkeypatch, intel=intel)
-
-    assert re.search(r'<meta property="og:image" content="([^"]*)">', html).group(1) == HERO
 
 
 # ── the three traps the wrap creates ─────────────────────────────────────────

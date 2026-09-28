@@ -20,6 +20,13 @@ def _no_real_browser(monkeypatch, request):
     monkeypatch.setattr(intel, "PLAYWRIGHT_ENABLED", False)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_apify(monkeypatch):
+    """No test reaches Apify: without the token social_posts fetches nothing.
+    Tests of the fetch fake the call and set their own token."""
+    monkeypatch.delenv("APIFY_TOKEN", raising=False)
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",

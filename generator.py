@@ -19,6 +19,7 @@ from typing import Optional
 import anthropic
 
 import cost
+import social_posts
 import tsd_theme
 from claude_text import first_text
 from config import (SITES_DIR, BOOKING_URL, build_booking_url, SENDER_NAME, SENDER_AGENCY,
@@ -1418,6 +1419,11 @@ def generate_offer_lead_magnet_page(
     press_block = _build_press_block(intel)
     social_block = _build_social_block(intel)
 
+    # The story's two social posts (POD01-239), fetched and reviewed BESIDE the
+    # article generation rather than after it: the build already runs close to
+    # build-smart-site's deadline, and generation is the ~90s this hides behind.
+    social_job = social_posts.start(intel, meter) if offer == "sponsored_story" else None
+
     # Carries which lead, which offer and which page the click came from, so a
     # booked call arrives with context instead of being reconstructed live
     # (POD01-130). prospect_id is optional: run_engine.py and the tests build
@@ -1732,6 +1738,13 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
     # to be an address a crawler can go and fetch.
     hero_image = _first_remote_image(article)
 
+    # Before inlining, so a website photo standing in for a post is inlined
+    # inside the same byte budget as the story's own photos. After the og:image
+    # read, so neither a post nor a stand-in photo can become the share image.
+    if offer == "sponsored_story":
+        article, photo_assets = _place_story_posts(
+            article, intel, photo_assets, social_posts.collect(social_job))
+
     article = _inline_photo_assets(article, photo_assets)
 
     # The article half of what a Sponsored Story is sold as (POD01-126). Get
@@ -1744,9 +1757,6 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
             canonical_url=preview_page_url(public_base, prospect_id),
             image_url=hero_image,
         )
-        # After the SEO read, so a social url can never become og:image, and
-        # after inlining, so the card is never mistaken for a prospect photo.
-        article = tsd_theme.insert_social_card(article, intel)
         html = tsd_theme.render_story_page(
             article, intel, booking_url, _story_title(html, intel),
         )
@@ -1769,6 +1779,35 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
         )
 
     return html
+
+
+def _place_story_posts(article: str, intel: dict, photo_assets: Optional[dict],
+                       found: dict) -> tuple:
+    """Put up to two posts into the story, and return it with the photo assets
+    to inline (POD01-239).
+
+    Social posts first. Where there are fewer than two, website photos the
+    article did not already use fill the gap, and only ones we hold the bytes
+    for: a photo we could not download is a broken image on the prospect's
+    page. With neither, the story carries no post section at all.
+    """
+    shown = [p for p in (found.get("posts") or []) if tsd_theme.post_embed(p)][:2]
+    blocks = [tsd_theme.post_embed(p) for p in shown]
+
+    assets = dict(photo_assets or {})
+    if len(blocks) < 2:
+        extra = found.get("extra_photos") or {}
+        assets.update(extra)
+        unused = [u for u in (intel.get("photos") or []) if u in assets and u not in article]
+        unused += [u for u in extra if u not in article and u not in unused]
+        for url in unused[:2 - len(blocks)]:
+            card = tsd_theme.photo_card(url, intel)
+            if card:
+                blocks.append(card)
+
+    print(f"  [generator] story posts: {len(shown)} social, "
+          f"{len(blocks) - len(shown)} website photo(s)")
+    return tsd_theme.insert_story_posts(article, blocks, tsd_theme.post_scripts(shown)), assets
 
 
 _BODY_RE = re.compile(r"<body\b[^>]*>(.*?)</body>", re.IGNORECASE | re.DOTALL)
