@@ -121,15 +121,26 @@ def test_sponsored_story_never_quotes_the_first_look_social_price(monkeypatch):
     assert "First Look" not in prompt
 
 
-def test_get_listed_sells_delivery_window_and_upgrade_credit(monkeypatch):
-    """Fixed markup since POD01-251: the offer block, not the model, says it."""
+def test_get_listed_shows_the_three_live_tiers_with_their_own_checkouts(monkeypatch):
+    """Fixed markup since POD01-251: the offer block, not the model, says it.
+    The same three cards as advertise.theresandiego.com/get-listed, each opening
+    the page its live button opens, carrying our attribution params."""
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
-    html = generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical="restaurant")
+    html = generator.generate_offer_lead_magnet_page(
+        "get_listed", _intel(), vertical="restaurant", prospect_id="acme-com---get-listed")
 
-    assert "Live within 5 business days" in html
-    assert "counts as credit toward your first Sponsored Story" in html
+    for tier, price, url in (
+        ("TIER 1", "$297", "https://advertise.theresandiego.com/get-listed-tier-1-checkout?"),
+        ("TIER 2", "$597", "https://advertise.theresandiego.com/get-listed-tier-2-checkout?"),
+        ("TIER 3", "$997", "https://advertise.theresandiego.com/scheduling-page?"),
+    ):
+        assert f"<h3>{tier}</h3>" in html and price in html and url in html, tier
+    assert "$997<em> / year</em>" in html
+    assert html.count("lead_id=acme-com---get-listed") >= 5  # 3 cards, claim bar, CTA
+    assert '<span class="tsd-badge">Recommended</span>' in html
+    assert "counts as credit" not in html
     assert "local restaurant" in _prompt_text(captured)
 
 
@@ -709,29 +720,16 @@ def test_an_oversized_page_warns_instead_of_failing_silently(monkeypatch, capsys
     assert "preview proxy rejects anything over 5 MB" in out
 
 
-FOOD_LINKS_POINT = "Website, menu, reservations and socials all linked in one place."
-
-
 @pytest.mark.parametrize("vertical", ["realtor", "contractor", "retail", None])
-def test_get_listed_only_promises_menu_and_reservations_to_food(monkeypatch, vertical):
+def test_get_listed_never_promises_a_contractor_a_menu(monkeypatch, vertical):
     # A contractor's live page read "Website, menu, reservations and socials".
+    # The tier cards carry the live copy, which names neither.
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
     html = generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical=vertical)
 
-    assert FOOD_LINKS_POINT not in html
-    assert "Your website and socials all linked in one place." in html
-
-
-@pytest.mark.parametrize("vertical", ["restaurant", "cafe"])
-def test_get_listed_food_keeps_tsd_menu_and_reservations_wording(monkeypatch, vertical):
-    captured = []
-    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
-
-    html = generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical=vertical)
-
-    assert FOOD_LINKS_POINT in html
+    assert "menu, reservations" not in html
 
 
 def test_get_listed_pins_one_star_rating_format(monkeypatch):

@@ -81,7 +81,7 @@ def test_the_sales_pitch_is_out_of_the_profile(monkeypatch):
 
     for pitch in ("$297", "Why List Here", "Social Proof", "Claim"):
         assert pitch not in article, pitch
-    assert "$297<em> one time</em>" in html
+    assert "<h3>TIER 1</h3>" in html and "$297" in html
 
 
 def test_it_stays_different_from_a_sponsored_story(monkeypatch):

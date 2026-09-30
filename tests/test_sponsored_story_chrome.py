@@ -110,7 +110,7 @@ def test_get_listed_gets_the_chrome_but_not_the_story_plans(monkeypatch):
 
     assert tsd_theme.TSD_LOGO in html
     assert "Sponsored Listing:" in html
-    assert "$297<em> one time</em>" in html
+    assert "Get Listed Pricing Plan" in html
     assert "/month</em>" not in html
     assert "guaranteed impressions" not in html
 

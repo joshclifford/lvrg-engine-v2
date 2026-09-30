@@ -189,24 +189,31 @@ GUARANTEE = ("Every Sponsored Story comes with guaranteed impressions. "
 PLANS_FOOTNOTE = ("Every plan includes ad campaign management and geo, age and demographic "
                   "targeting. Organic impressions are never charged.")
 
-# The Get Listed offer, from advertise.theresandiego.com/business-profile and the
-# client's own campaign-get-listed.md ("Live within 5 business days of sending us
-# your photos and details"), 30 Sep 2026. One flat fee, so one card, not tiers.
-LISTING_PRICE = "$297"
-LISTING_POINTS = [
-    "Permanent page, no monthly fee, no expiration",
-    "Live within 5 business days of sending us your photos and details",
-    "SEO-optimized so San Diegans searching for what you offer find you",
-    "Send us your photos and we format and publish them for you",
+# The three Get Listed tiers, word for word off advertise.theresandiego.com/
+# get-listed, with the page each button opens there, 30 Sep 2026. Ranges use a
+# hyphen where the live page has an en dash, like every other dash we publish.
+#
+# All three by Fazal's call, 30 Sep 2026. The client's campaign-get-listed.md
+# says "Sell Tier 1 today ... Don't quote or collect for those [Tier 2 and 3] on
+# a cold sequence"; the preview now shows what the live page shows instead.
+ADVERTISE_HOME = "https://advertise.theresandiego.com"
+# (tier, name, description, note, price, per, button, url, recommended)
+GET_LISTED_TIERS = [
+    ("TIER 1", "Base Profile",
+     "Permanent business profile page on ThereSanDiego.com with cross-referenced business + "
+     "owner schema markup, photo gallery, and category directory listing.",
+     "", "$297", "", "Get Started", f"{ADVERTISE_HOME}/get-listed-tier-1-checkout", False),
+    ("TIER 2", "Keyword Claims",
+     "Everything in Tier 1, plus 3-5 search phrases that are yours alone. When we write a guide "
+     "or a neighborhood piece that touches your specialty, those phrases link back to your profile.",
+     "Yours for <strong>12 months</strong>.", "$597", "", "Get Started",
+     f"{ADVERTISE_HOME}/get-listed-tier-2-checkout", True),
+    ("TIER 3", "Pillar Guide Placement",
+     "Everything in Tiers 1 and 2, plus featured placement in the ThereSanDiego pillar guide for "
+     "the customer's category.",
+     "Capacity-capped 1-2 slots per neighborhood.", "$997", "/ year", "Check Availability",
+     f"{ADVERTISE_HOME}/scheduling-page", False),
 ]
-# TSD's funnel sells "links to your website, menu, reservations and social
-# profiles", which only reads right for food. A contractor promised a menu is
-# copy nobody checked.
-LISTING_LINKS_FOOD = "Website, menu, reservations and socials all linked in one place."
-LISTING_LINKS_OTHER = "Your website and socials all linked in one place."
-FOOD_VERTICALS = ("restaurant", "cafe")
-LISTING_CREDIT = ("The $297 counts as credit toward your first Sponsored Story "
-                  "if you upgrade later.")
 
 _ICONS = {
     "directory": '<path d="M3 21V7l7-4v4l7-3v17h-5v-5h-4v5H3zm2-2h3v-3H5v3zm0-5h3v-3H5v3zm0-5h3V6L5 7.5V9zm5 10h3v-3h-3v3zm0-5h3v-3h-3v3zm0-5h3V6.5l-3 1.2V9zm5 10h3v-3h-3v3zm0-5h3v-3h-3v3z"/>',
@@ -367,6 +374,11 @@ h1,h2,h3,h4,h5,h6{font-family:'Oswald',Arial,sans-serif;font-weight:400;color:#4
 .tsd-plan li{padding:8px 0;border-bottom:1px solid #f0f0f0}
 .tsd-plan li:last-child{border-bottom:0}
 .tsd-plan .tsd-btn{margin-top:auto}
+.tsd-plan.tsd-tier{text-align:center}
+.tsd-tier-name{font-size:15px;color:#6b6b6b;margin-bottom:4px}
+.tsd-plan.tsd-tier p{font-size:14px;line-height:1.55;color:#333;margin:14px 0 0}
+.tsd-plan.tsd-tier p.tsd-tier-note{border-top:1px solid #f0f0f0;padding-top:12px;font-style:italic}
+.tsd-plan.tsd-tier .tsd-price{margin:26px 0 20px}
 .tsd-note{font-size:12px;color:#9a9a9a;margin-top:28px;max-width:720px;margin-left:auto;margin-right:auto;line-height:1.6}
 .tsd-btn{display:inline-block;background:#da195b;color:#fff;font-family:'Poppins',Arial,sans-serif;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;text-decoration:none;padding:13px 26px;text-align:center}
 .tsd-btn:hover{background:#b91249;color:#fff}
@@ -860,18 +872,32 @@ def photo_gallery(photo_urls: list, business_name: str) -> str:
     return f'<div class="tsd-gallery">\n{figures}\n</div>'
 
 
-def listing_offer_block(booking_url: str, business_name: str, vertical: str = "") -> str:
-    """The Get Listed offer: reach, one $297 card, the closing CTA.
+def listing_offer_block(booking_url: str, business_name: str) -> str:
+    """The Get Listed offer: reach, the three tier cards, the closing CTA.
 
     Fixed markup for the same reason as sales_block: this is the price list the
     prospect will be quoted from, so the model never writes it.
+
+    Each card opens the same TSD page its button opens on the live pricing page,
+    carrying the booking link's attribution params so a checkout still says
+    which lead and page it came from.
     """
     stats = "\n".join(
         f'        <div class="tsd-stat"><b>{value}</b><span>{label}</span></div>'
         for value, label in REACH
     )
-    links = LISTING_LINKS_FOOD if (vertical or "").lower() in FOOD_VERTICALS else LISTING_LINKS_OTHER
-    points = "\n".join(f"          <li>{p}</li>" for p in [*LISTING_POINTS[:2], links, *LISTING_POINTS[2:]])
+    params = booking_url.split("?", 1)[1] if "?" in booking_url else ""
+    cards = []
+    for tier, name, text, note, price, per, button, url, recommended in GET_LISTED_TIERS:
+        badge = '<span class="tsd-badge">Recommended</span>' if recommended else ""
+        href = f"{url}?{params}" if params else url
+        cards.append(f"""      <div class="tsd-plan tsd-tier{' tsd-popular' if recommended else ''}">{badge}
+        <h3>{tier}</h3>
+        <div class="tsd-tier-name">{name}</div>
+        <p>{text}</p>{f'{chr(10)}        <p class="tsd-tier-note">{note}</p>' if note else ''}
+        <div class="tsd-price">{price}{f'<em> {per}</em>' if per else ''}</div>
+        <a class="tsd-btn" href="{_e(href)}" target="_blank" rel="noopener">{button} &rarr;</a>
+      </div>""")
     return f"""<section class="tsd-reach">
   <div class="tsd-container">
     <h2>There San Diego's Reach</h2>
@@ -883,18 +909,10 @@ def listing_offer_block(booking_url: str, business_name: str, vertical: str = ""
 
 <section class="tsd-plans">
   <div class="tsd-container">
-    <h2>Claim Your ThereSanDiego.com Listing</h2>
+    <h2>Get Listed Pricing Plan</h2>
     <div class="tsd-plan-grid">
-      <div class="tsd-plan tsd-popular">
-        <h3>Business Profile</h3>
-        <div class="tsd-price">{LISTING_PRICE}<em> one time</em></div>
-        <ul>
-{points}
-        </ul>
-        <a class="tsd-btn" href="{_e(booking_url)}">Claim This Listing</a>
-      </div>
+{chr(10).join(cards)}
     </div>
-    <p class="tsd-note">{LISTING_CREDIT}</p>
   </div>
 </section>
 
@@ -959,7 +977,7 @@ def render_profile_page(article: str, intel: dict, booking_url: str, title: str,
         article, intel, title,
         claim_bar(booking_url, "This is a preview of your ThereSanDiego.com listing",
                   "Claim This Listing"),
-        listing_offer_block(booking_url, intel.get("business_name", ""), vertical),
+        listing_offer_block(booking_url, intel.get("business_name", "")),
         vertical,
     )
 

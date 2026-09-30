@@ -219,8 +219,9 @@ def test_every_other_link_on_the_page_is_left_alone():
 def test_a_get_listed_page_ships_attributed_even_when_the_model_ignores_the_prompt(monkeypatch):
     """The 10 Sep failure, as a test: the model wrote the bare booking URL on
     both CTAs. Since POD01-251 those links sit inside the profile, so they go to
-    the business's own site, and the three buttons that are ours (claim bar,
-    offer card, closing CTA) are fixed markup carrying the tracked link."""
+    the business's own site, and the two booking buttons that are ours (claim
+    bar, closing CTA) are fixed markup carrying the tracked link. The three tier
+    cards open TSD's own checkouts instead."""
     captured = []
     monkeypatch.setattr(
         generator, "_get_client", lambda **k: _mock_client(captured, html=_bare(2))
@@ -231,7 +232,7 @@ def test_a_get_listed_page_ships_attributed_even_when_the_model_ignores_the_prom
     )
 
     expected = config.build_booking_url("get_listed", "mayamooncollective-com---get-listed")
-    assert html.count(expected.replace("&", "&amp;")) == 3
+    assert html.count(expected.replace("&", "&amp;")) == 2
     assert 'href="https://theresandiego.com/letschat"' not in html
     assert html.count('<a href="https://darkhorsecoffeeroasters.com">Claim This Listing</a>') == 2
 
