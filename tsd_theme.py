@@ -29,6 +29,9 @@ The stylesheet is hand-written rather than linked, because the live page pulls
 twenty-odd WordPress stylesheets and a preview has to render standalone from a
 static host with no theme behind it.
 
+Get Listed uses the same chrome around a Business Profile instead of an
+article (render_profile_page, POD01-251), as the live profiles do.
+
 "What's Hot" and "Upcoming Events" are real TSD posts and events with their
 real thumbnails, hardcoded on purpose. They are the same for every prospect:
 their job is to make the page read as a live magazine, and a model asked to
@@ -49,6 +52,14 @@ TSD_FOOTER_BG = f"{TSD_HOME}/wp-content/uploads/tsd-footer.png"
 # rather than paraphrased.
 DISCLOSURE = (
     "<strong>Sponsored Listing:</strong> This page features a local business that has "
+    "partnered with us to expand its reach in the San Diego community. We only feature "
+    "partners we believe our readers would genuinely find valuable."
+)
+# The same disclosure worded for an article. The box above is the one TSD puts on
+# its Get Listed profiles; a story is not a listing (POD01-264). Wording pending
+# Josh's confirmation of what TSD prints on a paid story.
+STORY_DISCLOSURE = (
+    "<strong>Sponsored Story:</strong> This article features a local business that has "
     "partnered with us to expand its reach in the San Diego community. We only feature "
     "partners we believe our readers would genuinely find valuable."
 )
@@ -140,6 +151,8 @@ FOOTER_SOCIALS = [
 # block on the page a prospect reads as data rather than prose.
 DIRECTORIES = {
     "realtor": ("San Diego Realtors", f"{TSD_HOME}/san-diego-realtors/"),
+    # The Directory row on the live Elements Design & Build profile, 30 Sep 2026.
+    "contractor": ("San Diego Contractors", f"{TSD_HOME}/san-diego-contractors/"),
     "restaurant": ("Eat + Drink", f"{TSD_HOME}/eat-drink/"),
     "cafe": ("Eat + Drink", f"{TSD_HOME}/eat-drink/"),
     "bar": ("Eat + Drink", f"{TSD_HOME}/eat-drink/"),
@@ -175,6 +188,25 @@ GUARANTEE = ("Every Sponsored Story comes with guaranteed impressions. "
              "If we don't hit the number, we keep promoting until we do.")
 PLANS_FOOTNOTE = ("Every plan includes ad campaign management and geo, age and demographic "
                   "targeting. Organic impressions are never charged.")
+
+# The Get Listed offer, from advertise.theresandiego.com/business-profile and the
+# client's own campaign-get-listed.md ("Live within 5 business days of sending us
+# your photos and details"), 30 Sep 2026. One flat fee, so one card, not tiers.
+LISTING_PRICE = "$297"
+LISTING_POINTS = [
+    "Permanent page, no monthly fee, no expiration",
+    "Live within 5 business days of sending us your photos and details",
+    "SEO-optimized so San Diegans searching for what you offer find you",
+    "Send us your photos and we format and publish them for you",
+]
+# TSD's funnel sells "links to your website, menu, reservations and social
+# profiles", which only reads right for food. A contractor promised a menu is
+# copy nobody checked.
+LISTING_LINKS_FOOD = "Website, menu, reservations and socials all linked in one place."
+LISTING_LINKS_OTHER = "Your website and socials all linked in one place."
+FOOD_VERTICALS = ("restaurant", "cafe")
+LISTING_CREDIT = ("The $297 counts as credit toward your first Sponsored Story "
+                  "if you upgrade later.")
 
 _ICONS = {
     "directory": '<path d="M3 21V7l7-4v4l7-3v17h-5v-5h-4v5H3zm2-2h3v-3H5v3zm0-5h3v-3H5v3zm0-5h3V6L5 7.5V9zm5 10h3v-3h-3v3zm0-5h3v-3h-3v3zm0-5h3V6.5l-3 1.2V9zm5 10h3v-3h-3v3zm0-5h3v-3h-3v3z"/>',
@@ -257,6 +289,11 @@ h1,h2,h3,h4,h5,h6{font-family:'Oswald',Arial,sans-serif;font-weight:400;color:#4
 .tsd-factbox ul{list-style:none;margin:0;padding:0}
 .tsd-factbox li{font-size:15px;line-height:25.5px;color:#333;margin-bottom:9px}
 .tsd-factbox li strong{font-family:'Oswald',Arial,sans-serif;font-weight:500;color:#4a4a4a}
+.tsd-article blockquote{border:0;padding:0;margin:0 8% 28px;text-align:center}
+.tsd-article blockquote::before{content:'\\201C';display:block;font-size:78px;line-height:78px;height:30px;overflow:hidden;margin-bottom:21px}
+.tsd-gallery{display:flex;flex-wrap:wrap;gap:16px;margin:32px 0}
+.tsd-article .tsd-gallery figure{flex:1 1 calc(50% - 8px);margin:0}
+.tsd-article .tsd-gallery img{aspect-ratio:3/2;object-fit:cover}
 
 .tsd-embed{border:1px solid #dbdbdb;border-radius:3px;margin:34px 0;padding:14px 16px;display:flex;align-items:center;gap:12px;background:#fff}
 .tsd-embed-avatar{flex:0 0 40px;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:linear-gradient(45deg,#f9ce34,#ee2a7b,#6228d7)}
@@ -364,12 +401,13 @@ def _e(value) -> str:
     return escape(str(value or ""), quote=True)
 
 
-def claim_bar(booking_url: str) -> str:
+def claim_bar(booking_url: str, text: str = "This is a preview of your Sponsored Story",
+              button: str = "Claim This Story") -> str:
     """Ours, not TSD's. Sits above the site header so the prospect reads the
     offer before the chrome, exactly as every other LVRG preview does."""
     return f"""<div class="tsd-claim">
-  <span>This is a preview of your Sponsored Story</span>
-  <a href="{_e(booking_url)}">Claim This Story &rarr;</a>
+  <span>{text}</span>
+  <a href="{_e(booking_url)}">{button} &rarr;</a>
 </div>"""
 
 
@@ -390,8 +428,8 @@ def site_header() -> str:
 </header>"""
 
 
-def disclosure() -> str:
-    return f'<div class="tsd-disclosure">{DISCLOSURE}</div>'
+def disclosure(text: str = DISCLOSURE) -> str:
+    return f'<div class="tsd-disclosure">{text}</div>'
 
 
 # The platforms we can draw, in the order they show, with the name a reader
@@ -476,14 +514,21 @@ def insert_follow_row(article: str, intel: dict) -> str:
     return article.rstrip() + f'\n<div class="tsd-follow-strip"><strong>Follow {name}</strong> {icons}</div>\n'
 
 
-def business_details(intel: dict) -> str:
+def _directory(intel: dict, vertical: str = "") -> tuple:
+    """The TSD directory this business is filed under. The vertical the user
+    picked wins over the scraped business_type, which has no "realtor"."""
+    return (DIRECTORIES.get((vertical or "").lower())
+            or DIRECTORIES.get((intel.get("business_type") or "").lower(), DEFAULT_DIRECTORY))
+
+
+def business_details(intel: dict, vertical: str = "") -> str:
     """The "Business Details" panel, built only from data we actually hold.
 
     A row is written only when its value exists. The live panel never prints
     "Not listed", and this is the one block a prospect reads as data rather
     than prose, so an empty row here is worse than a short panel.
     """
-    directory = DIRECTORIES.get((intel.get("business_type") or "").lower(), DEFAULT_DIRECTORY)
+    directory = _directory(intel, vertical)
     site = intel.get("page_url") or (f"https://{intel['domain']}" if intel.get("domain") else "")
 
     rows = [("directory", "Directory", f'<a href="{_e(directory[1])}">{_e(directory[0])}</a>')]
@@ -736,6 +781,129 @@ def sales_block(booking_url: str, business_name: str) -> str:
 </section>"""
 
 
+# ── Get Listed: the Business Profile (POD01-251) ─────────────────────────────
+# Measured off the two live profiles, Josh Taylor and Elements Design & Build:
+# the same site chrome as the story, no byline, the facts as a plain list under
+# "Credentials & Details", the owner's quote as a centred blockquote under a big
+# opening mark (gt-style.min.css: 6rem on a 13px root), and the project photos
+# as a two-column gallery just above the closing call to action.
+
+# Platforms whose handle is how a reader knows the account. The rest read
+# better as the business name, the way the live list shows Yelp.
+_HANDLE_PLATFORMS = ("instagram", "tiktok", "youtube")
+
+
+def _social_label(icon: str, url: str, intel: dict) -> str:
+    path = [p for p in urlparse(url).path.split("/") if p]
+    if icon in _HANDLE_PLATFORMS and path:
+        return "@" + path[-1].lstrip("@")
+    return intel.get("business_name") or urlparse(url).hostname or url
+
+
+def _shown_domain(url: str) -> str:
+    host = (urlparse(url).hostname or "").removeprefix("www.")
+    path = urlparse(url).path.rstrip("/")
+    return host + path if host else url
+
+
+def credentials_list(intel: dict, own_site_url: str) -> str:
+    """"Credentials & Details": the hard facts, one row each, only the ones we
+    hold. Fixed markup, never the model's: a phone number or a handle the model
+    wrote could be somebody else's.
+
+    No licence or name-and-title row. The live profiles have one because the
+    owner sent it in; the scrape does not find licences, and a guessed one is a
+    false statement on a page the business will read.
+    """
+    rows = [f"Company: {_e(intel.get('business_name'))}"] if intel.get("business_name") else []
+    services = [s for s in (intel.get("services") or []) if str(s).strip()]
+    if services:
+        rows.append("Specialties: " + _e(", ".join(str(s) for s in services[:4])))
+    location = (intel.get("location") or "").strip()
+    if location:
+        row = f"Address: {_e(location)}"
+        # A map link only for a street address. "San Diego, CA" on a map is a
+        # pin on City Hall.
+        if any(c.isdigit() for c in location):
+            maps = "https://maps.google.com/?q=" + "+".join(location.split())
+            row += f' (<a href="{_e(maps)}" target="_blank" rel="noopener">Google Maps</a>)'
+        rows.append(row)
+    if intel.get("neighborhood"):
+        rows.append(f"Neighborhood: {_e(intel['neighborhood'])}")
+    if intel.get("phone"):
+        rows.append(f"Phone: {_e(intel['phone'])}")
+    if intel.get("email"):
+        rows.append(f'Email: <a href="mailto:{_e(intel["email"])}">{_e(intel["email"])}</a>')
+    if own_site_url:
+        rows.append(f'Website: <a href="{_e(own_site_url)}" target="_blank" rel="noopener">'
+                    f"{_e(_shown_domain(own_site_url))}</a>")
+    if intel.get("hours"):
+        rows.append(f"Hours: {_e(intel['hours'])}")
+    for icon, name, url in _social_links(intel):
+        rows.append(f'{name}: <a href="{_e(url)}" target="_blank" rel="noopener">'
+                    f"{_e(_social_label(icon, url, intel))}</a>")
+
+    items = "\n".join(f"  <li>{row}</li>" for row in rows)
+    return f"<h2>Credentials &amp; Details</h2>\n<ul>\n{items}\n</ul>"
+
+
+def photo_gallery(photo_urls: list, business_name: str) -> str:
+    """The profile's photo gallery, from their own website photos. Empty when
+    there are none: a gallery of placeholders is worse than no gallery."""
+    photo_urls = [u for u in photo_urls if u]
+    if not photo_urls:
+        return ""
+    figures = "\n".join(
+        f'  <figure><img src="{_e(url)}" alt="A photo from {_e(business_name)}" loading="lazy"></figure>'
+        for url in photo_urls
+    )
+    return f'<div class="tsd-gallery">\n{figures}\n</div>'
+
+
+def listing_offer_block(booking_url: str, business_name: str, vertical: str = "") -> str:
+    """The Get Listed offer: reach, one $297 card, the closing CTA.
+
+    Fixed markup for the same reason as sales_block: this is the price list the
+    prospect will be quoted from, so the model never writes it.
+    """
+    stats = "\n".join(
+        f'        <div class="tsd-stat"><b>{value}</b><span>{label}</span></div>'
+        for value, label in REACH
+    )
+    links = LISTING_LINKS_FOOD if (vertical or "").lower() in FOOD_VERTICALS else LISTING_LINKS_OTHER
+    points = "\n".join(f"          <li>{p}</li>" for p in [*LISTING_POINTS[:2], links, *LISTING_POINTS[2:]])
+    return f"""<section class="tsd-reach">
+  <div class="tsd-container">
+    <h2>There San Diego's Reach</h2>
+    <div class="tsd-reach-grid">
+{stats}
+    </div>
+  </div>
+</section>
+
+<section class="tsd-plans">
+  <div class="tsd-container">
+    <h2>Claim Your ThereSanDiego.com Listing</h2>
+    <div class="tsd-plan-grid">
+      <div class="tsd-plan tsd-popular">
+        <h3>Business Profile</h3>
+        <div class="tsd-price">{LISTING_PRICE}<em> one time</em></div>
+        <ul>
+{points}
+        </ul>
+        <a class="tsd-btn" href="{_e(booking_url)}">Claim This Listing</a>
+      </div>
+    </div>
+    <p class="tsd-note">{LISTING_CREDIT}</p>
+  </div>
+</section>
+
+<section class="tsd-cta">
+  <h2>Ready to see {_e(business_name)} listed on ThereSanDiego.com?</h2>
+  <a class="tsd-btn" href="{_e(booking_url)}">Claim This Listing &rarr;</a>
+</section>"""
+
+
 def site_footer() -> str:
     columns = []
     for heading, links in FOOTER_LINKS:
@@ -776,6 +944,28 @@ def site_footer() -> str:
 
 def render_story_page(article: str, intel: dict, booking_url: str, title: str) -> str:
     """Drop the model's article into the TSD chrome and return a whole page."""
+    return _render_page(
+        article, intel, title, claim_bar(booking_url),
+        sales_block(booking_url, intel.get("business_name", "")),
+        notice=STORY_DISCLOSURE,
+    )
+
+
+def render_profile_page(article: str, intel: dict, booking_url: str, title: str,
+                        vertical: str = "") -> str:
+    """The Get Listed Business Profile: the same chrome, the listing's claim bar
+    and the one $297 offer instead of the monthly story plans."""
+    return _render_page(
+        article, intel, title,
+        claim_bar(booking_url, "This is a preview of your ThereSanDiego.com listing",
+                  "Claim This Listing"),
+        listing_offer_block(booking_url, intel.get("business_name", ""), vertical),
+        vertical,
+    )
+
+
+def _render_page(article: str, intel: dict, title: str, claim: str, offer: str,
+                 vertical: str = "", notice: str = DISCLOSURE) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -788,11 +978,11 @@ def render_story_page(article: str, intel: dict, booking_url: str, title: str) -
 <style>{STYLES}</style>
 </head>
 <body>
-{claim_bar(booking_url)}
+{claim}
 {site_header()}
 
 <div class="tsd-container">
-  {disclosure()}
+  {disclosure(notice)}
   <div class="tsd-row">
     <div class="tsd-main">
       <article class="tsd-article">
@@ -800,14 +990,14 @@ def render_story_page(article: str, intel: dict, booking_url: str, title: str) -
       </article>
     </div>
     <aside class="tsd-side">
-{business_details(intel)}
+{business_details(intel, vertical)}
 {whats_hot()}
 {upcoming_events()}
     </aside>
   </div>
 </div>
 
-{sales_block(booking_url, intel.get('business_name', ''))}
+{offer}
 {site_footer()}
 </body>
 </html>"""

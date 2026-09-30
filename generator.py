@@ -707,8 +707,46 @@ def _json_ld_article(
     return json.dumps(article, ensure_ascii=False, indent=2).replace("</", "<\\/")
 
 
-def _seo_head_tags(html: str, intel: dict, canonical_url: str, image_url: str) -> str:
-    """The head tags a Sponsored Story is sold on, built from the page itself."""
+def _json_ld_profile(
+    headline: str, description: str, canonical_url: str, image_url: str, intel: dict,
+) -> str:
+    """schema.org for a Business Profile: the page, with the business as its
+    main entity. "Business + owner schema markup" is what the client's Get
+    Listed page sells the $297 profile on.
+
+    Same rule as the article: a field with no real value is left out, never
+    filled. The owner stays out too, since all the scrape holds is a first name.
+    """
+    socials = [url for _, _, url in tsd_theme._social_links(intel)]
+    business = {
+        "@type": "LocalBusiness",
+        "name": intel.get("business_name") or "",
+        "description": (intel.get("description") or "").strip(),
+        "url": intel.get("page_url") or (f"https://{intel['domain']}" if intel.get("domain") else ""),
+        "telephone": intel.get("phone") or "",
+        "email": intel.get("email") or "",
+        # Plain text, for the reason _json_ld_article gives.
+        "address": intel.get("location") or "",
+        "image": image_url,
+        "sameAs": socials,
+    }
+    page = {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        "name": headline,
+        "description": description,
+        "url": canonical_url,
+        "publisher": {"@type": "Organization", "name": PUBLISHER_NAME},
+        "mainEntity": {k: v for k, v in business.items() if v},
+    }
+    page = {k: v for k, v in page.items() if v}
+    return json.dumps(page, ensure_ascii=False, indent=2).replace("</", "<\\/")
+
+
+def _seo_head_tags(html: str, intel: dict, canonical_url: str, image_url: str,
+                   schema: str = "article") -> str:
+    """The head tags a Sponsored Story is sold on, built from the page itself.
+    A Business Profile carries the same set with `schema="profile"`."""
     headline = _first_tag_text(html, "h1") or _first_tag_text(html, "title")
     description = _meta_description(html, intel)
     published = date.today().isoformat()
@@ -745,11 +783,12 @@ def _seo_head_tags(html: str, intel: dict, canonical_url: str, image_url: str) -
             tags.append(f'<meta name="{name}" content="{escape(value, quote=True)}">')
 
     if headline:
-        tags.append(
-            '<script type="application/ld+json">\n'
-            + _json_ld_article(headline, description, canonical_url, image_url, published, intel)
-            + "\n</script>"
+        data = (
+            _json_ld_profile(headline, description, canonical_url, image_url, intel)
+            if schema == "profile"
+            else _json_ld_article(headline, description, canonical_url, image_url, published, intel)
         )
+        tags.append('<script type="application/ld+json">\n' + data + "\n</script>")
 
     return "\n  ".join(tags)
 
@@ -1413,6 +1452,54 @@ GET_LISTED_VERTICAL_FRAMING = {
     ),
 }
 
+# The one section of a Business Profile that changes with the industry, and the
+# closing heading, per vertical: (heading, what goes in it, CTA heading). Realtor
+# and contractor are the live Josh Taylor and Elements Design & Build pages word
+# for word; the rest follow the same idea, a section a reader in that trade
+# actually wants.
+GET_LISTED_PROFILE_SECTIONS = {
+    "realtor": (
+        "Personal Connection",
+        "their own tie to San Diego and the neighborhoods they work: where they grew up, how they "
+        "came to the area or to real estate. Only what their own content says",
+        "Start Your Real Estate Journey",
+    ),
+    "contractor": (
+        "One Question Worth Asking Any Contractor Before You Hire",
+        "one practical question a homeowner should ask any contractor before hiring, set in <em>, "
+        "then how this business answers it, drawn from how their own content describes their "
+        "process. Their answer in your words, never as a quote",
+        "Start Your Project",
+    ),
+    "restaurant": (
+        "What to Order on Your First Visit",
+        "two or three dishes or drinks from their real menu or services and why a first-timer "
+        "should start there",
+        "Plan Your Visit",
+    ),
+    "cafe": (
+        "What to Order on Your First Visit",
+        "two or three drinks or bakes from their real menu or services and why a first-timer "
+        "should start there",
+        "Plan Your Visit",
+    ),
+    "retail": (
+        "What to Look For on Your First Visit",
+        "two or three things they stock that a first-time visitor should look for, from their "
+        "real services",
+        "Plan Your Visit",
+    ),
+}
+GET_LISTED_DEFAULT_SECTION = (
+    "What to Know Before You Reach Out",
+    "what a first-time customer should know: how they work, who they work with and how to get "
+    "started, drawn from their own content",
+    "Get in Touch",
+)
+
+# Where the model marks the spot for Credentials & Details, which is fixed markup.
+CREDENTIALS_MARKER = "<!-- CREDENTIALS -->"
+
 
 def generate_offer_lead_magnet_page(
     offer: str,
@@ -1430,16 +1517,17 @@ def generate_offer_lead_magnet_page(
     omitted or unrecognized, so an unknown vertical degrades gracefully
     instead of failing the build.
 
-    Mirrors generate_page's shape (same photo/reviews/press/social blocks,
-    same Tailwind/CDN tech stack, same claim-bar + nav + footer structure)
-    so a lead magnet built here looks like it belongs next to a Free
-    Website preview, not a different product. The chat widget is injected
-    separately by the caller, same as every other generated page.
+    Both are a fragment the model writes, wrapped in the fixed ThereSanDiego
+    chrome from tsd_theme.py: the story as an article, Get Listed as a Business
+    Profile (POD01-251). The chat widget is injected separately by the caller,
+    same as every other generated page.
     """
     photo_block = _build_photo_block(intel)
     reviews_block = _build_reviews_block(intel)
     press_block = _build_press_block(intel)
-    social_block = _build_social_block(intel)
+    # A profile's socials are fixed markup in Credentials & Details and the
+    # sidebar, so the model is not handed them to link somewhere else.
+    social_block = _build_social_block(intel) if offer == "sponsored_story" else ""
 
     # The story's two social posts (POD01-239), fetched and reviewed BESIDE the
     # article generation rather than after it: the build already runs close to
@@ -1463,62 +1551,88 @@ def generate_offer_lead_magnet_page(
         role, detail_hint = GET_LISTED_VERTICAL_FRAMING.get(
             vertical, ("a local business", "their services and what makes them worth choosing")
         )
-        # TSD's funnel sells "links to your website, menu, reservations and
-        # social profiles", which only reads right for food. A contractor's page
-        # promising their menu is copy nobody checked.
-        links_point = (
-            "Website, menu, reservations and socials all linked in one place."
-            if vertical in ("restaurant", "cafe")
-            else "Your website and socials all linked in one place."
+        section_heading, section_brief, cta_heading = GET_LISTED_PROFILE_SECTIONS.get(
+            vertical, GET_LISTED_DEFAULT_SECTION
         )
-        page_purpose = f"""This is a MOCK-UP of how {intel['business_name']}, {role}, would look
-featured in the ThereSanDiego.com business directory, as a personalized preview to close a
-Get Listed ($297 one-time, permanent profile) prospect. Build it around {detail_hint}.
+        # The site text is what the owner quote is checked against after the
+        # build (_keep_only_real_quotes), so the model sees the same text.
+        site_text = (intel.get("raw_text") or "").strip() or "None available."
+        # A profile's bullets are hard facts, and the scrape's social_proof is
+        # where those live (years, licences, awards). It can also carry what
+        # customers said, which this page must not repeat.
+        proof = (intel.get("social_proof") or "").strip() or "None given."
+        owner = (intel.get("owner_name") or "").strip() or "Not given."
+        # The profile body only, like the Sponsored Story. The claim bar, site header,
+        # disclosure, Business Details sidebar, Credentials & Details list, the
+        # photo gallery, the $297 offer and the footer are fixed markup in
+        # tsd_theme.py, measured off the live Josh Taylor and Elements Design &
+        # Build profiles. The old prompt asked for a whole page and got back a
+        # Tailwind landing page with a sales pitch inside it (POD01-251).
+        page_purpose = f"""You are writing the BODY of a ThereSanDiego.com Business Profile for {intel['business_name']},
+{role}: the permanent profile page a Get Listed ($297 one-time, permanent profile) client gets on
+ThereSanDiego.com. Build it around {detail_hint}.
 
-STRUCTURE (this is a directory profile mock-up, not a full website):
-1. CLAIM BAR: sticky, same as every LVRG preview.
-   "This is a preview of your ThereSanDiego.com listing" plus gold pill "Claim This Listing →" linking to {booking_url}
-2. PROFILE HEADER: business name, {role} framing, location and neighborhood, primary photo.
-   If a rating was supplied above, show it here next to the name in exactly this form: one gold star,
-   the rating, then the review count in brackets, e.g. "★ 4.7 (14 reviews)", or "★ 4.7" with no count.
-   Never a row of stars: 4.7 drawn as five stars overstates it. Use this same form everywhere the
-   rating appears on the page.
-3. ABOUT: 4-6 sentences on {detail_hint}, in ThereSanDiego's warm local-guide voice, broken into
-   two short paragraphs rather than one block. Work in what they want visitors to do, and speak to
-   where they currently struggle, without ever naming the struggle as a criticism of them.
-   Link the business name inline to {own_site_url} the first time it appears here.
-3b. FEATURE IMAGE: if photos were supplied, place one full-width between ABOUT and WHAT THEY OFFER,
-   with a short caption drawn from their real content. Never a stock image, never a placeholder.
-4. WHAT THEY OFFER: their real services as a short scannable list, grouped sensibly, two columns on
-   desktop. Use only the services given above. If none were listed, omit this section.
-   Follow it with a SECOND photo if two or more were supplied.
-5. AT A GLANCE: a compact fact panel built ONLY from real data given above.
-   Neighborhood, hours, phone, rating, and a "Visit website" link to {own_site_url},
-   each shown only if present. Omit the panel entirely if fewer than two of them exist.
-   Never write "Not listed" on the page.
-5b. LINKS BACK TO THEIR SITE: "links to your website, menu, reservations and social profiles" is
-   one of the things the $297 profile is sold on, so the mockup has to demonstrate it. Carry at
-   least TWO links to {own_site_url}: the inline one in ABOUT and the fact-panel one.
-   Use their real domain exactly as given, never a placeholder. If socials were supplied, link
-   those in the footer. Never add rel="nofollow".
-6. WHY LIST HERE: short points, every one of them confirmed on TSD's own funnel.
-   Permanent page, no monthly fee, no expiration. Live within 5 business days.
-   SEO-optimized so San Diegans searching for what you offer find you.
-   {links_point}
-   Send us your photos and we format and publish them for you.
-   Person and business schema, so Google is told who you are as the person behind the business.
-7. WHERE THIS SITS: one short line placing the profile in context, that it lives on a
-   local guide 70,000+ San Diegans read every month, not on a pay-to-play directory.
-8. GALLERY: real photos if provided, otherwise omit.
-9. SOCIAL PROOF: if a rating and review count were supplied above, show them as a stat in the same
-   one-star form as the header, and
-   nothing more than the stat. Re-read the REVIEWS rule above before writing this section: you
-   were given no review text, so this section is two numbers, not a sentence about what anyone said.
-   If no rating, omit this section.
-10. CTA: "Claim this listing for $297, one time, permanent. Live in 5 business days."
-   plus a quieter second line: "The $297 comes off your first Sponsored Story if you upgrade later."
-   Both drive to {booking_url}
-11. FOOTER: location, phone, hours."""
+A Business Profile is NOT an article and NOT an ad. It reads as a short founder-led introduction
+followed by hard facts: who they are, what they are known for, how to reach them. It never mentions
+a price, There San Diego's offer, or why anyone should list here.
+
+You are NOT building a page. The ThereSanDiego site header, the sponsored-listing disclosure, the
+Business Details sidebar, the Credentials & Details list, the photo gallery, the offer and the
+footer already exist and will be wrapped around what you write. Write the profile and nothing else.
+
+━━━ THEIR OWN PROOF AND WORDS ━━━
+- Owner or founder first name: {owner}
+- Their own proof claims, from their website: {proof}
+  Use ONLY facts about the business itself from this: years in business, founding year, licences,
+  certifications, awards, sales or project numbers. State them as plainly as they do, never rounded
+  up. If it holds anything customers said, ignore that part: it is not yours to quote.
+- Their website text, word for word:
+<<<
+{site_text}
+>>>
+
+WRITE EXACTLY THIS, IN THIS ORDER:
+
+1. <h1>: the headline, in the form the live ThereSanDiego profiles use:
+   BUSINESS NAME, WHAT THEY ARE: A HOOK
+   - Start with their name exactly as written here: {intel['business_name']}
+   - Then a comma and what they are in two to four plain words, for example "Realtor" or "Carmel
+     Valley Realtors". Leave it out when the name already says it.
+   - Then a colon and a short hook built ONLY on the facts given above. No rankings, awards or
+     superlatives unless the facts above state them. One colon in the whole headline.
+   The form, on the two real profiles: "Josh Taylor, Realtor: The Aussie Agent Who Sells San Diego
+   Block by Block" and "Elements Design & Build: The San Diego Remodeler That Treats Communication
+   Like Craft". Borrow the form, never their words.
+   No byline under it: the live profiles carry none.
+2. THE OPENING: 2 to 4 short paragraphs in ThereSanDiego's warm, locals-know-locals voice. Founder-led
+   and specific when their content supports it: who started it, what they saw, what they set out to
+   do differently. Work in what they want visitors to do. Link the business name to {own_site_url}
+   the first time it appears. Never add rel="nofollow": the link counting is part of what they buy.
+3. ONE PHOTO, if any were supplied: after the opening paragraphs, as
+   <figure><img src="..." alt="..."></figure>. Use the first photo given above and no other: the
+   gallery further down is built around you from the rest.
+4. <h2>What They're Known For</h2> then a <ul> of 3 to 5 <li>, each one a HARD FACT: a founding year,
+   a licence, an award, a number, a specialty named in their own content. If a rating was supplied
+   above, one bullet may state it in exactly this form: one gold star, the rating, then the review
+   count in brackets, e.g. "★ 4.7 (14 reviews)", or "★ 4.7" with no count. Never a row of stars: 4.7
+   drawn as five stars overstates it. Fewer bullets rather than a soft one.
+5. Then this line, exactly, on its own: {CREDENTIALS_MARKER}
+   The Credentials & Details list goes there. Do not write it yourself.
+6. <h2>{section_heading}</h2> then one or two short paragraphs on {section_brief}. If their content
+   gives you nothing real for this, leave out the heading and the section.
+7. <h2>In Their Own Words</h2>, ONLY when the website text above holds a first-person passage by the
+   business or its owner ("I", "we", "our") that works as a quote. Copy 1 to 3 sentences of it
+   EXACTLY as written there, character for character, as <blockquote><p>...</p></blockquote>.
+   Follow it with <p>Name, role</p> only if the website text says who said it.
+   Never write, trim together or tidy up a quote. If no such passage exists, leave out the heading and
+   the section entirely. A quote they never said, on their own profile, is the one thing on this page
+   they would notice first.
+8. <h2>{cta_heading}</h2> then one short paragraph inviting the reader to take the step they want
+   visitors to take, ending with a link to {own_site_url}. Their site, never ours.
+
+Do not write a claim bar, a nav, a byline, a pull quote, a fact box, a price, a "why list here", a
+reach or audience figure, a booking button, a gallery or a footer. Every one of those is either
+built around you or does not belong on a profile."""
     elif offer == "sponsored_story":
         # Do not price this off First Look. First Look ($197 one-time) is a SOCIAL
         # plan, an Instagram post rather than an article, and sits on /social-plans.
@@ -1608,47 +1722,40 @@ of them is the giveaway that the page was generated."""
     # the profile does.
     min_own_links = 3 if offer == "sponsored_story" else 2
 
-    # A Sponsored Story is a fragment dropped into a stylesheet it does not own,
-    # so it gets a markup contract where the profile gets a tech stack. A
+    # Both offers are a fragment dropped into a stylesheet they do not own. A
     # Tailwind CDN tag inside the ThereSanDiego chrome restyles the whole page,
     # which is the exact failure the chrome exists to stop.
     if offer == "sponsored_story":
-        tech_stack = """━━━ MARKUP ━━━
-The wrapper carries the fonts, the colours and every rule the article needs. You write semantic
-HTML and nothing else: <h1>, <h2>, <p>, <a>, <img>, <figure>, <ul>, <li>, plus the three class
-names named in the structure below (tsd-byline, tsd-hero, tsd-pullquote, tsd-factbox).
+        allowed = ("<h1>, <h2>, <p>, <a>, <img>, <figure>, <ul>, <li>, plus the class names named in "
+                   "the structure below (tsd-byline, tsd-hero, tsd-pullquote, tsd-factbox).")
+        piece = "article"
+    else:
+        allowed = ("<h1>, <h2>, <p>, <a>, <em>, <img>, <figure>, <ul>, <li>, <blockquote>, and the "
+                   f"{CREDENTIALS_MARKER} line. No class names at all.")
+        piece = "profile"
+    tech_stack = f"""━━━ MARKUP ━━━
+The wrapper carries the fonts, the colours and every rule the {piece} needs. You write semantic
+HTML and nothing else: {allowed}
 NO <style> block, NO CSS framework, NO Tailwind, NO style= attributes, NO class names of your own.
 Anything you style yourself will look like a different website sitting inside this one."""
-        output_rule = """━━━ OUTPUT ━━━
-Return ONLY the article markup, as an HTML FRAGMENT starting with <h1>. No explanation, no markdown
+    output_rule = f"""━━━ OUTPUT ━━━
+Return ONLY the {piece} markup, as an HTML FRAGMENT starting with <h1>. No explanation, no markdown
 fences, no <!DOCTYPE>, no <html>, <head>, <body>, <title>, <style> or <script>, and no chat widget."""
-        # No booking URL in this prompt at all. The claim bar, plan cards and
-        # buttons that carry it are fixed markup around the article, so the
-        # model never needs it, and when it was given it anyway it linked the
-        # story's closing "free home valuation" to our sales page (Felicia
-        # Lewis Group, 28 Sep).
-        booking_link_rule = f"""2. OUR BOOKING PAGE: NOT in this article. This is OUR link, not theirs.
-   The claim bar, the plan cards and every button that carries it are built around you. Inside the
-   story, EVERY link goes to {own_site_url}. A reader who clicks "book a consultation" or "get a
+    # No booking URL in this prompt at all. The claim bar, offer and buttons
+    # that carry it are fixed markup around the fragment, so the model never
+    # needs it, and when it was given it anyway it linked the story's closing
+    # "free home valuation" to our sales page (Felicia Lewis Group, 28 Sep).
+    booking_link_rule = f"""2. OUR BOOKING PAGE: NOT in this {piece}. This is OUR link, not theirs.
+   The claim bar, the offer and every button that carries it are built around you. Inside the
+   {piece}, EVERY link goes to {own_site_url}. A reader who clicks "book a consultation" or "get a
    free valuation" expects to reach the business, not There San Diego."""
-    else:
-        tech_stack = f"""━━━ TECH STACK ━━━
-Use Tailwind CSS via CDN. Include this in <head>:
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>tailwind.config = {{ theme: {{ extend: {{ colors: {{ brand: '{intel.get('primary_color','#f59e0b')}' }} }} }} }}</script>
-Use Google Fonts matching the brand vibe above.
-NO inline style= attributes. Use Tailwind classes exclusively."""
-        output_rule = """━━━ OUTPUT ━━━
-Return ONLY the complete HTML. No explanation. No markdown fences. No chat widget (injected separately).
-Start with <!DOCTYPE html>"""
-        booking_link_rule = f"""2. THE BOOKING PAGE: {booking_url}
-   For the claim bar, the CTA buttons and the plan cards ONLY. This is OUR link, not theirs.
-   It must never replace a link to their own website, and adding more of these does not satisfy
-   the requirement above.
-   Use this URL EXACTLY as written, query string included. The params after the "?" say which
-   lead and which offer the click came from, and a CTA that drops them arrives anonymous.
-   Do not shorten it, do not strip it back to the bare domain, do not vary it between buttons."""
 
+
+    socials_rule = (
+        "Socials, if supplied, go in the footer. They are additional, not a substitute for the website link."
+        if offer == "sponsored_story"
+        else "Socials are linked by the wrapper, not by you. They are no substitute for the website link."
+    )
 
     page_prompt = f"""You are building a personalized lead-magnet PREVIEW PAGE for {intel['business_name']}.
 This is NOT a full business website. See the specific structure below for what it actually is.
@@ -1695,7 +1802,7 @@ Two different destinations. Do not confuse them, and do not let one stand in for
 
 {booking_link_rule}
 
-Socials, if supplied, go in the footer. They are additional, not a substitute for the website link.
+{socials_rule}
 
 ━━━ WHAT TO BUILD ━━━
 {page_purpose}
@@ -1749,22 +1856,24 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
     html = _close_truncated_html(html)
     html = _strip_em_dashes(html)
 
-    # A Sponsored Story is an article dropped into fixed ThereSanDiego chrome,
-    # so everything that MEASURES the model's work has to run on the article
+    # Both offers are a fragment dropped into fixed ThereSanDiego chrome, so
+    # everything that MEASURES the model's work has to run on the fragment
     # rather than the finished page. The chrome links to the prospect's own site
     # in its fact panel, carries TSD's logo as the first <img> on the page, and
     # opens with a sponsorship disclosure longer than the meta-description
     # cut-off. Measured after the wrap, the backlink guard would pass a story
     # with two backlinks, og:image would be the There San Diego logo, and the
     # Google snippet would be the disclosure instead of the story.
-    article = _story_article(html) if offer == "sponsored_story" else html
-    if offer == "sponsored_story":
-        # Before the SEO read, so og:title and the structured data carry the
-        # same headline the page shows.
-        article = _name_the_headline(article, intel)
-        # Before the backlink count: the link it produces is a real one to
-        # their site, pointing where the reader expected to go.
-        article = _story_links_to_their_site(article, own_site_url, intel.get("business_name", ""))
+    article = _story_article(html)
+    # Before the SEO read, so og:title and the structured data carry the same
+    # headline the page shows.
+    article = _name_the_headline(article, intel)
+    # Before the backlink count: the link it produces is a real one to their
+    # site, pointing where the reader expected to go.
+    article = _story_links_to_their_site(
+        article, own_site_url, intel.get("business_name", ""), offer)
+    if offer == "get_listed":
+        article = _keep_only_real_quotes(article, intel)
 
     # Count the backlinks BEFORE photo inlining, so a base64 blob containing the
     # domain by coincidence cannot inflate the number.
@@ -1785,6 +1894,12 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
 
     _warn_fabricated_reviews(article, offer, intel.get("business_name", ""))
 
+    # After the backlink count: the list carries a Website row, and fixed markup
+    # must not pass a guard that measures what the model wrote.
+    if offer == "get_listed":
+        article = _place_credentials(article, tsd_theme.credentials_list(intel, own_site_url))
+        article = _place_profile_gallery(article, intel, photo_assets)
+
     # Read before inlining. After it this src is a data: URI, and og:image has
     # to be an address a crawler can go and fetch.
     hero_image = _first_remote_image(article)
@@ -1801,22 +1916,24 @@ Socials, if supplied, go in the footer. They are additional, not a substitute fo
 
     article = _inline_photo_assets(article, photo_assets)
 
-    # The article half of what a Sponsored Story is sold as (POD01-126). Get
-    # Listed is a directory profile rather than a published article and its own
-    # ticket asks for none of this, so it stays a single-offer concern until
-    # someone decides otherwise.
+    # The head tags a Sponsored Story is sold on (POD01-126). The live profiles
+    # carry the same set, with the business itself as the structured data
+    # rather than an article about it (POD01-251).
+    head_tags = _seo_head_tags(
+        article, intel,
+        canonical_url=preview_page_url(public_base, prospect_id),
+        image_url=hero_image,
+        schema="article" if offer == "sponsored_story" else "profile",
+    )
     if offer == "sponsored_story":
-        head_tags = _seo_head_tags(
-            article, intel,
-            canonical_url=preview_page_url(public_base, prospect_id),
-            image_url=hero_image,
-        )
         html = tsd_theme.render_story_page(
             article, intel, booking_url, _story_title(html, intel),
         )
-        html = _inject_head_tags(html, head_tags)
     else:
-        html = article
+        html = tsd_theme.render_profile_page(
+            article, intel, booking_url, _story_title(html, intel), vertical or "",
+        )
+    html = _inject_head_tags(html, head_tags)
 
     html = _attribute_booking_links(html, booking_url, f"{offer} page for {intel['business_name']}")
 
@@ -1891,7 +2008,8 @@ def _story_article(html: str) -> str:
     return html.strip()
 
 
-def _story_links_to_their_site(article: str, own_site_url: str, business_name: str) -> str:
+def _story_links_to_their_site(article: str, own_site_url: str, business_name: str,
+                               offer: str = "sponsored_story") -> str:
     """Point any booking link inside the story at the business's own site.
 
     The story's closing line on Felicia Lewis Group's page (28 Sep) linked "a
@@ -1917,10 +2035,86 @@ def _story_links_to_their_site(article: str, own_site_url: str, business_name: s
     article = _HREF_RE.sub(_swap, article)
     if rewritten:
         print(
-            f"  [generator] WARNING: sponsored_story for {business_name} linked our booking "
+            f"  [generator] WARNING: {offer} for {business_name} linked our booking "
             f"page {rewritten} time(s) inside the story; pointed at {own_site_url} instead."
         )
     return article
+
+
+_BLOCKQUOTE_RE = re.compile(r"<blockquote\b[^>]*>(.*?)</blockquote>", re.IGNORECASE | re.DOTALL)
+# The "In Their Own Words" heading, the quote, and the attribution line under it.
+_OWN_WORDS_RE = re.compile(
+    r"<h2\b[^>]*>[^<]*own words[^<]*</h2>\s*|<blockquote\b.*?</blockquote>\s*(?:<p\b[^>]*>[^<]{0,120}</p>)?",
+    re.IGNORECASE | re.DOTALL,
+)
+# Shorter than this, a "match" is a phrase that happens to occur on their site,
+# not a quote of it.
+_MIN_QUOTE_CHARS = 40
+
+
+def _letters(text: str) -> str:
+    """Only the letters and digits, lowercased. Quote marks, dashes (which
+    _strip_em_dashes has already turned into commas) and spacing all differ
+    between the site text and the model's copy of it without changing a word."""
+    return "".join(c for c in unescape(text).lower() if c.isalnum())
+
+
+def _keep_only_real_quotes(article: str, intel: dict) -> str:
+    """Drop "In Their Own Words" unless the quote is on their website as written.
+
+    The prompt asks for an exact copy from the site text or no section, and
+    asking is not the same as knowing. An invented first-person quote on the
+    owner's own profile is the first line they would read and the one they
+    know they never said.
+    """
+    quotes = _BLOCKQUOTE_RE.findall(article)
+    if not quotes:
+        return article
+    site = _letters(intel.get("raw_text") or "")
+    real = all(
+        len(_letters(q)) >= _MIN_QUOTE_CHARS and _letters(q) in site
+        for q in (_visible_text(q) for q in quotes)
+    )
+    if real:
+        return article
+    print(f"  [generator] WARNING: get_listed for {intel.get('business_name')} quoted words "
+          f"that are not on their website; dropped the In Their Own Words section.")
+    return _OWN_WORDS_RE.sub("", article)
+
+
+_H2_RE = re.compile(r"<h2\b", re.IGNORECASE)
+
+
+def _place_credentials(article: str, credentials: str) -> str:
+    """Put Credentials & Details where the model marked it, after "What They're
+    Known For" on the live profiles. Without the marker, before the second
+    heading, which is that same place when the model kept the order."""
+    if CREDENTIALS_MARKER in article:
+        return article.replace(CREDENTIALS_MARKER, credentials, 1)
+    headings = [m.start() for m in _H2_RE.finditer(article)]
+    if len(headings) >= 2:
+        at = headings[1]
+        return article[:at] + credentials + "\n" + article[at:]
+    return article.rstrip() + "\n" + credentials
+
+
+def _place_profile_gallery(article: str, intel: dict, photo_assets: Optional[dict]) -> str:
+    """Their website photos the profile does not already show, as a gallery
+    above the closing call to action, where Elements carries its three.
+
+    Only photos we hold the bytes for: one we could not download is a broken
+    image on the prospect's page. None left, no gallery.
+    """
+    assets = photo_assets or {}
+    unused = [u for u in (intel.get("photos") or []) if u in assets and u not in article][:3]
+    gallery = tsd_theme.photo_gallery(unused, intel.get("business_name") or "")
+    if not gallery:
+        return article
+    headings = [m.start() for m in _H2_RE.finditer(article)]
+    if len(headings) >= 2:
+        at = headings[-1]
+        return article[:at] + gallery + "\n" + article[at:]
+    return article.rstrip() + "\n" + gallery
 
 
 def _story_title(raw_html: str, intel: dict) -> str:

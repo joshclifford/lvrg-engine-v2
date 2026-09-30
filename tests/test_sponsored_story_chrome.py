@@ -51,11 +51,22 @@ def test_the_page_is_the_there_san_diego_site_not_a_landing_page(monkeypatch):
     assert tsd_theme.TSD_LOGO in html
     for label, url in tsd_theme.NAV:
         assert f'<a href="{url}">{label}</a>' in html
-    assert "Sponsored Listing:" in html
+    assert "Sponsored Story:</strong> This article features" in html
     assert "<span>Business Details</span>" in html
     assert "<span>What's Hot</span>" in html
     assert "<span>Upcoming Events</span>" in html
     assert "There Media Group, LLC" in html
+
+
+def test_the_story_is_disclosed_as_a_story_not_a_listing(monkeypatch):
+    """"Sponsored Listing" is the box TSD puts on its Get Listed profiles. A
+    story is paid too, so it keeps a disclosure, worded for an article (POD01-264)."""
+    story, _ = _build(monkeypatch)
+    profile, _ = _build(monkeypatch, offer="get_listed")
+
+    assert "Sponsored Listing" not in story
+    assert f'<div class="tsd-disclosure">{tsd_theme.STORY_DISCLOSURE}</div>' in story
+    assert f'<div class="tsd-disclosure">{tsd_theme.DISCLOSURE}</div>' in profile
 
 
 def test_the_sidebar_carries_real_tsd_posts_and_events_not_invented_ones(monkeypatch):
@@ -90,14 +101,18 @@ def test_the_offer_is_fixed_markup_so_the_model_cannot_reprice_it(monkeypatch):
     assert "$497" not in _prompt_text(captured)
 
 
-def test_get_listed_gets_none_of_this(monkeypatch):
-    """Scope. A directory profile is a different offer with its own prompt, and
-    widening the chrome to it here would ship it untested."""
+def test_get_listed_gets_the_chrome_but_not_the_story_plans(monkeypatch):
+    """Since POD01-251 the profile sits in the same site chrome, as the live
+    Business Profiles do, with its one $297 offer instead of the monthly plans.
+    More in test_get_listed_profile.py."""
     html, _ = _build(monkeypatch, offer="get_listed",
                      html="<!DOCTYPE html><html><body><h1>Dark Horse</h1></body></html>")
 
-    assert tsd_theme.TSD_LOGO not in html
-    assert "Sponsored Listing:" not in html
+    assert tsd_theme.TSD_LOGO in html
+    assert "Sponsored Listing:" in html
+    assert "$297<em> one time</em>" in html
+    assert "/month</em>" not in html
+    assert "guaranteed impressions" not in html
 
 
 # ── what the model is asked for ──────────────────────────────────────────────
@@ -236,9 +251,11 @@ def test_the_story_prompt_never_hands_the_model_our_booking_link(monkeypatch):
     assert "OUR BOOKING PAGE: NOT in this article" in prompt
 
 
-def test_get_listed_still_gets_the_booking_link_for_its_buttons(monkeypatch):
+def test_get_listed_buttons_carry_the_booking_link_the_prompt_never_sees(monkeypatch):
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
-    generator.generate_offer_lead_magnet_page("get_listed", _intel())
+    html = generator.generate_offer_lead_magnet_page("get_listed", _intel())
 
-    assert "theresandiego.com/letschat?" in _prompt_text(captured)
+    assert "letschat" not in _prompt_text(captured)
+    assert "OUR BOOKING PAGE: NOT in this profile" in _prompt_text(captured)
+    assert "theresandiego.com/letschat?" in html
