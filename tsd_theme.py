@@ -206,7 +206,7 @@ GET_LISTED_TIERS = [
     ("TIER 2", "Keyword Claims",
      "Everything in Tier 1, plus 3-5 search phrases that are yours alone. When we write a guide "
      "or a neighborhood piece that touches your specialty, those phrases link back to your profile.",
-     "Yours for <strong>12 months</strong>.", "$597", "", "Get Started",
+     "<em>Yours for <strong>12 months</strong>.</em>", "$597", "", "Get Started",
      f"{ADVERTISE_HOME}/get-listed-tier-2-checkout", True),
     ("TIER 3", "Pillar Guide Placement",
      "Everything in Tiers 1 and 2, plus featured placement in the ThereSanDiego pillar guide for "
@@ -375,10 +375,11 @@ h1,h2,h3,h4,h5,h6{font-family:'Oswald',Arial,sans-serif;font-weight:400;color:#4
 .tsd-plan li:last-child{border-bottom:0}
 .tsd-plan .tsd-btn{margin-top:auto}
 .tsd-plan.tsd-tier{text-align:center}
+.tsd-plan.tsd-tier:not(.tsd-popular){border:3px solid transparent}
 .tsd-tier-name{font-size:15px;color:#6b6b6b;margin-bottom:4px}
-.tsd-plan.tsd-tier p{font-size:14px;line-height:1.55;color:#333;margin:14px 0 0}
-.tsd-plan.tsd-tier p.tsd-tier-note{border-top:1px solid #f0f0f0;padding-top:12px;font-style:italic}
-.tsd-plan.tsd-tier .tsd-price{margin:26px 0 20px}
+.tsd-plan.tsd-tier p{font-size:14px;line-height:1.55;color:#333;margin:14px 0 0;padding-bottom:14px;border-bottom:1px solid #f0f0f0}
+.tsd-plan.tsd-tier .tsd-price{margin:auto 0 20px;padding-top:26px}
+.tsd-plan.tsd-tier .tsd-btn{margin-top:0}
 .tsd-note{font-size:12px;color:#9a9a9a;margin-top:28px;max-width:720px;margin-left:auto;margin-right:auto;line-height:1.6}
 .tsd-btn{display:inline-block;background:#da195b;color:#fff;font-family:'Poppins',Arial,sans-serif;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;text-decoration:none;padding:13px 26px;text-align:center}
 .tsd-btn:hover{background:#b91249;color:#fff}
