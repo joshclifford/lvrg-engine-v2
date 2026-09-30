@@ -166,14 +166,38 @@ DEFAULT_DIRECTORY = ("San Diego Guides", f"{TSD_HOME}/guides/")
 # back as whatever the model felt like rendering. Fixed markup cannot drift,
 # and the test that pins these numbers now reads the finished page instead of
 # the instructions that asked for it.
+#
+# The cards themselves, description, features and both buttons, are word for
+# word off advertise.theresandiego.com/story-plans, 30 Sep 2026, with a comma
+# where the live copy has an em dash. "Get Started" opens that plan's own TSD
+# checkout; "Speak with a Rep" opens our booking page, which is what the live
+# button's Let's Chat pop-up books.
+# (name, price, description, features, popular, checkout)
 PLANS = [
-    ("LOCAL", "$497", "10,000 guaranteed impressions a month",
-     "Neighborhood targeting", "One story per quarter", False),
-    ("CITYWIDE", "$997", "25,000 guaranteed impressions a month",
-     "Full San Diego metro", "One story per month", True),
-    ("COUNTYWIDE", "$1,500", "50,000 guaranteed impressions a month",
-     "All of San Diego County", "One story per month", False),
+    ("LOCAL", "$497",
+     "Your neighbors are your customers. This plan targets San Diegans within a few miles of your "
+     "door, the people most likely to walk in, come back, and tell their friends. Best for "
+     "neighborhood restaurants, coffee shops, bars, salons, and retail that thrive on local foot "
+     "traffic and repeat visits.",
+     ["1 per quarter sponsored story", "10,000/month guaranteed impressions"],
+     False, "https://advertise.theresandiego.com/sponsoredstories-local-checkout"),
+    ("CITYWIDE", "$997",
+     "Some businesses draw from all over San Diego, not just the block. This plan promotes your "
+     "story across the full metro area, reaching San Diegans who drive 20+ minutes for the right "
+     "experience. Best for destination restaurants, theater and live events, fitness studios with "
+     "a citywide following, and any business where 'worth the trip' is the selling point.",
+     ["1 per month sponsored story", "25,000/month guaranteed impressions"],
+     True, "https://advertise.theresandiego.com/sponsoredstories-citywide-checkout"),
+    ("COUNTYWIDE", "$1,500",
+     "Maximum reach across all of San Diego County, from Oceanside to the border. Best for "
+     "businesses and events that want to be seen everywhere, by everyone. Ideal for major events, "
+     "multi-location businesses, and brands building countywide awareness.",
+     ["1 per month sponsored story", "50,000/month guaranteed impressions"],
+     False, "https://advertise.theresandiego.com/sponsoredstories-countywide-checkout"),
 ]
+# The same three lines close every card on the live page.
+PLAN_COMMON_FEATURES = ["Targeting: Geo, age &amp; demo", "Ad campaign management included",
+                        "Organic impressions not charged"]
 
 # TSD's own published figures, including the "+". 80,000+ is a floor the client
 # publishes; 82,000 was somebody adding 40k Facebook to 42k Instagram and
@@ -374,8 +398,13 @@ h1,h2,h3,h4,h5,h6{font-family:'Oswald',Arial,sans-serif;font-weight:400;color:#4
 .tsd-plan li{padding:8px 0;border-bottom:1px solid #f0f0f0}
 .tsd-plan li:last-child{border-bottom:0}
 .tsd-plan .tsd-btn{margin-top:auto}
+.tsd-plan-text{font-size:14px;line-height:1.6;color:#333;margin:18px 0 0}
+.tsd-plan-actions{margin-top:auto;display:flex;flex-wrap:wrap;gap:8px}
+.tsd-plan-actions .tsd-btn{margin-top:0;flex:1 1 120px;padding:12px 10px;text-transform:none;letter-spacing:0;font-size:14px;white-space:nowrap}
+.tsd-btn.tsd-btn-outline{background:#fff;color:#1a1a1a;border:2px solid #da195b;padding:10px 12px}
+.tsd-btn.tsd-btn-outline:hover{background:#fdf0f4;color:#1a1a1a}
 .tsd-plan.tsd-tier{text-align:center}
-.tsd-plan.tsd-tier:not(.tsd-popular){border:3px solid transparent}
+.tsd-plan:not(.tsd-popular){border:3px solid transparent}
 .tsd-tier-name{font-size:15px;color:#6b6b6b;margin-bottom:4px}
 .tsd-plan.tsd-tier p{font-size:14px;line-height:1.55;color:#333;margin:14px 0 0;padding-bottom:14px;border-bottom:1px solid #f0f0f0}
 .tsd-plan.tsd-tier .tsd-price{margin:auto 0 20px;padding-top:26px}
@@ -740,6 +769,13 @@ def insert_story_posts(article: str, blocks: list, scripts: str = "") -> str:
     return article + ("\n" + scripts if scripts else "")
 
 
+def _with_params(url: str, booking_url: str) -> str:
+    """A TSD checkout link carrying the booking link's attribution params, so a
+    checkout still says which lead and page it came from."""
+    params = booking_url.split("?", 1)[1] if "?" in booking_url else ""
+    return f"{url}?{params}" if params else url
+
+
 def sales_block(booking_url: str, business_name: str) -> str:
     """The offer itself: guarantee, reach, the three tiers, the closing CTA.
 
@@ -753,17 +789,20 @@ def sales_block(booking_url: str, business_name: str) -> str:
         for value, label in REACH
     )
     cards = []
-    for name, price, impressions, targeting, cadence, popular in PLANS:
+    for name, price, description, features, popular, checkout in PLANS:
         badge = '<span class="tsd-badge">Most Popular</span>' if popular else ""
+        items = "\n".join(f"          <li>{f}</li>" for f in [*features, *PLAN_COMMON_FEATURES])
         cards.append(f"""      <div class="tsd-plan{' tsd-popular' if popular else ''}">{badge}
         <h3>{name}</h3>
         <div class="tsd-price">{price}<em>/month</em></div>
+        <p class="tsd-plan-text">{description}</p>
         <ul>
-          <li>{impressions}</li>
-          <li>{targeting}</li>
-          <li>{cadence}</li>
+{items}
         </ul>
-        <a class="tsd-btn" href="{_e(booking_url)}">Claim This Plan</a>
+        <div class="tsd-plan-actions">
+          <a class="tsd-btn" href="{_e(_with_params(checkout, booking_url))}" target="_blank" rel="noopener">Get Started</a>
+          <a class="tsd-btn tsd-btn-outline" href="{_e(booking_url)}">Speak with a Rep</a>
+        </div>
       </div>""")
     return f"""<section class="tsd-guarantee">
   <p>{GUARANTEE}</p>
@@ -887,11 +926,10 @@ def listing_offer_block(booking_url: str, business_name: str) -> str:
         f'        <div class="tsd-stat"><b>{value}</b><span>{label}</span></div>'
         for value, label in REACH
     )
-    params = booking_url.split("?", 1)[1] if "?" in booking_url else ""
     cards = []
     for tier, name, text, note, price, per, button, url, recommended in GET_LISTED_TIERS:
         badge = '<span class="tsd-badge">Recommended</span>' if recommended else ""
-        href = f"{url}?{params}" if params else url
+        href = _with_params(url, booking_url)
         cards.append(f"""      <div class="tsd-plan tsd-tier{' tsd-popular' if recommended else ''}">{badge}
         <h3>{tier}</h3>
         <div class="tsd-tier-name">{name}</div>
