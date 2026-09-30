@@ -18,6 +18,7 @@ import os
 import threading
 import time
 import re
+import struct
 import anthropic
 from html import unescape as _unescape
 from urllib.parse import urljoin, urlparse, parse_qs
@@ -128,6 +129,26 @@ _JUNK_IMAGE = re.compile(
     re.I,
 )
 _PHOTO_EXT = re.compile(r"\.(jpe?g|png|webp)(\?|$)", re.I)
+
+# What a photo can never be. A URL with NO extension is no longer dropped: image
+# CDNs serve photos from addresses like lp-cdn.com/cdn-cgi/image/…/media/<uuid>,
+# and requiring .jpg/.png/.webp cost Felicia Lewis Group (Luxury Presence) every
+# one of its ~20 photos (POD01-269). Those are downloaded and checked instead.
+_NOT_PHOTO_EXT = re.compile(r"\.(svg|gif|ico|bmp|tiff?|js|css|php|aspx?|html?)(\?|$)", re.I)
+
+# Tracking pixels are <img> tags too, and with no extension to judge them by
+# they would take a candidate slot a real photo needed.
+_TRACKER_HOST = re.compile(
+    r"(^|\.)(facebook\.com|google-analytics\.com|googletagmanager\.com|doubleclick\.net|"
+    r"bat\.bing\.com|analytics\.twitter\.com|px\.ads\.linkedin\.com|ct\.pinterest\.com|"
+    r"analytics\.tiktok\.com|t\.co)$", re.I)
+
+# Cloudflare Image Resizing: /cdn-cgi/image/<options>/<source>. A page carries
+# the same photo at several widths (src at 1280, srcset from 320), and one with
+# no width option is the full original, often past _MAX_PHOTO_BYTES. Asking for
+# one size makes the copies one URL and keeps the photo sharp but light.
+_CF_RESIZE = re.compile(r"^(https?://[^/]+/cdn-cgi/image/)([^/]+)/(.+)$", re.I)
+_CF_RESIZE_OPTIONS = "format=auto,quality=85,fit=scale-down,width=1280"
 
 # Campaign artwork. Real on the page, wrong on a rebuilt site — a June giveaway
 # banner as the hero in August reads as stale.
@@ -738,8 +759,11 @@ def _photo_candidates(html: str, base_url: str, limit: int = 6) -> list:
     # src, and the first URL of any srcset (largest is usually last, but the
     # first is always well-formed — good enough for a hero candidate).
     candidates += re.findall(r'<img[^>]+src=["\']([^"\']+)', html, re.I)
-    candidates += [s.split()[0] for s in
-                   re.findall(r'<img[^>]+srcset=["\']([^"\',]+)', html, re.I) if s.strip()]
+    # The first URL ends at whitespace, not at a comma: Cloudflare resize URLs
+    # carry commas in their options (format=auto,quality=85,…), and cutting there
+    # turned every Luxury Presence srcset into a broken half-URL.
+    candidates += [s.split()[0].rstrip(",") for s in
+                   re.findall(r'<img[^>]+srcset=["\']([^"\']+)', html, re.I) if s.strip()]
 
     seen, kept = set(), []
     for position, raw in enumerate(candidates):
@@ -757,13 +781,17 @@ def _photo_candidates(html: str, base_url: str, limit: int = 6) -> list:
         absolute = _unwrap_image_proxy(absolute)
         if not absolute.startswith(("http://", "https://")):
             continue
-        # Extension check stays on the FULL url: _PHOTO_EXT allows the
-        # extension to sit in the query (`(\?|$)`), and some CDNs serve
-        # `/img?file=photo.jpg`. Narrowing this to the path would drop those —
-        # re-creating, on a different set of sites, the silent zero-photo
-        # failure being fixed two lines below.
-        if not _PHOTO_EXT.search(absolute):
-            continue          # skips .svg, .gif and extensionless endpoints
+        cf = _CF_RESIZE.match(absolute)
+        if cf:
+            absolute = f"{cf.group(1)}{_CF_RESIZE_OPTIONS}/{cf.group(3)}"
+        # Extension check stays on the FULL url: the extension may sit in the
+        # query (`/img?file=photo.jpg`), and some CDNs serve it that way.
+        # A URL with no extension at all is kept (POD01-269); fetch_photo_assets
+        # downloads it and keeps it only if it turns out to be a photo.
+        if _NOT_PHOTO_EXT.search(absolute):
+            continue          # skips .svg, .gif and other non-photo files
+        if _TRACKER_HOST.search(urlparse(absolute).netloc):
+            continue
         # Before the junk check, which reads the path only and cannot see a
         # tile host. A map tile is a valid .png with an innocent path.
         if _is_map_tile(absolute):
@@ -833,6 +861,88 @@ def extract_photos(html: str, base_url: str, limit: int = 6) -> list:
 # would spend build seconds on bytes the prompt never shows the model.
 _PHOTO_INLINE_MAX = int(os.environ.get("PHOTO_INLINE_MAX", "4"))
 
+# How many candidates are downloaded and checked to find those 4. The first six
+# on felicialewisgroup.com are all logos and award badges; its photos start
+# around the eighth. They download in parallel, so looking further costs bytes,
+# not wall clock.
+_PHOTO_VERIFY_MAX = int(os.environ.get("PHOTO_VERIFY_MAX", "12"))
+
+# What a downloaded image must be to count as a photo of the business
+# (POD01-268). The URL cannot tell: Garbuilders' four 512x512 line-art icons
+# had ordinary names and were published full width, one captioned as a pool
+# the business built.
+_NOT_PHOTO_MIME = {"image/gif", "image/svg+xml", "image/x-icon",
+                   "image/vnd.microsoft.icon", "image/bmp"}
+_MIN_PHOTO_SIDE = 300
+# A lossless photo runs 1-3 bytes per pixel; flat icons and logos compress to a
+# fraction of that (Garbuilders' icons: 0.03-0.08).
+_MIN_PNG_BYTES_PER_PIXEL = 0.2
+
+
+def _image_size(blob: bytes):
+    """(kind, width, height, png_colour_type) read from the file header, or
+    None when the layout is not one we know."""
+    try:
+        if blob[:8] == b"\x89PNG\r\n\x1a\n" and blob[12:16] == b"IHDR":
+            w, h, _, colour = struct.unpack(">IIBB", blob[16:26])
+            return "png", w, h, colour
+        if blob[:2] == b"\xff\xd8":
+            i = 2
+            while i + 9 < len(blob):
+                if blob[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = blob[i + 1]
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                              0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    h, w = struct.unpack(">HH", blob[i + 5:i + 9])
+                    return "jpeg", w, h, None
+                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                    i += 2
+                    continue
+                i += 2 + struct.unpack(">H", blob[i + 2:i + 4])[0]
+            return None
+        if blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+            chunk = blob[12:16]
+            if chunk == b"VP8 ":
+                w, h = struct.unpack("<HH", blob[26:30])
+                return "webp", w & 0x3FFF, h & 0x3FFF, None
+            if chunk == b"VP8L":
+                b = blob[21:25]
+                w = 1 + (((b[1] & 0x3F) << 8) | b[0])
+                h = 1 + (((b[3] & 0x0F) << 10) | (b[2] << 2) | ((b[1] & 0xC0) >> 6))
+                return "webp", w, h, None
+            if chunk == b"VP8X":
+                w = 1 + int.from_bytes(blob[24:27], "little")
+                h = 1 + int.from_bytes(blob[27:30], "little")
+                return "webp", w, h, None
+    except (struct.error, IndexError):
+        return None
+    return None
+
+
+def _not_a_photo(mime: str, blob: bytes) -> str:
+    """Why this image is not a photo of the business, or "" when it may be.
+
+    An image whose size cannot be read is kept, which is what every image got
+    before this check existed: the rule only removes what it can prove.
+    """
+    if mime in _NOT_PHOTO_MIME:
+        return mime
+    size = _image_size(blob)
+    if not size:
+        return ""
+    kind, w, h, colour = size
+    if min(w, h) < _MIN_PHOTO_SIDE:
+        return f"{w}x{h}, too small"
+    if kind == "png":
+        # 256 colours at most. Logos, badges and icons, never a photograph.
+        if colour == 3:
+            return f"{w}x{h} palette PNG"
+        if len(blob) / (w * h) < _MIN_PNG_BYTES_PER_PIXEL:
+            return f"{w}x{h} flat PNG graphic"
+    return ""
+
 # Wall clock per image, enforced against the read loop and not just the socket:
 # requests' timeout is per-read, so a server trickling one byte at a time
 # satisfies it forever. The byte cap below bounds memory but not time.
@@ -886,7 +996,7 @@ def _fetch_one_photo(url: str):
         return None
 
 
-def fetch_photo_assets(photos: list) -> dict:
+def fetch_photo_assets(photos: list, dropped: set = None) -> dict:
     """Download the photos the generator will publish, as {url: data-uri}.
 
     PARALLEL, not serial, and that is the whole feasibility argument: measured
@@ -897,8 +1007,14 @@ def fetch_photo_assets(photos: list) -> dict:
     A url missing from the returned dict simply keeps pointing at the
     prospect's server, so a partial result degrades to today's behaviour for
     those photos instead of failing the build.
+
+    Up to _PHOTO_VERIFY_MAX candidates are downloaded and the first
+    _PHOTO_INLINE_MAX that are photos are kept (POD01-268/269). `dropped`, when
+    given, collects the urls that must not be published at all: an image that
+    proved not to be a photo, and a url with no photo extension that could not
+    be downloaded, since nothing then says it is an image.
     """
-    urls = [u for u in (photos or [])[:_PHOTO_INLINE_MAX] if u]
+    urls = [u for u in (photos or [])[:_PHOTO_VERIFY_MAX] if u]
     if not urls:
         return {}
 
@@ -915,8 +1031,18 @@ def fetch_photo_assets(photos: list) -> dict:
     for url in urls:
         got = fetched.get(url)
         if not got:
+            if dropped is not None and not _PHOTO_EXT.search(url):
+                dropped.add(url)
             continue
         mime, blob = got
+        reason = _not_a_photo(mime, blob)
+        if reason:
+            print(f"  [intel] Not a photo, skipped ({reason}): {url[:120]}")
+            if dropped is not None:
+                dropped.add(url)
+            continue
+        if len(out) >= _PHOTO_INLINE_MAX:
+            continue
         if total + len(blob) > _MAX_PHOTO_TOTAL_BYTES:
             continue
         total += len(blob)
@@ -1315,7 +1441,7 @@ def scrape_site(domain: str, page_url: str = "", meter=None) -> dict:
     # Resolve relative image paths against where the html ACTUALLY came from.
     # Using `url` here sent every relative src to the pre-redirect host, so a
     # prospect who moved domains lost all their photos to 404s.
-    photos = extract_photos(raw_html, scraped.get("final_url") or url)
+    photos = extract_photos(raw_html, scraped.get("final_url") or url, limit=_PHOTO_VERIFY_MAX)
     print(f"  [intel] Photos: {len(photos)} found on their site")
 
     # Download what the generator will actually publish, so the finished site
@@ -1324,9 +1450,14 @@ def scrape_site(domain: str, page_url: str = "", meter=None) -> dict:
     # come out of INTEL_BUDGET_SECONDS, and if something has to give, the
     # optional press search is the stage designed to be dropped. A page with no
     # press quotes beats a page whose photos die the week after we send it.
-    photo_assets = fetch_photo_assets(photos)
+    dropped = set()
+    photo_assets = fetch_photo_assets(photos, dropped)
+    # Whatever proved not to be a photo, or could not be shown to be an image,
+    # leaves the list, so no page hotlinks it either (POD01-268/269).
+    photos = [p for p in photos if p not in dropped]
     print(f"  [intel] Photos inlined: {len(photo_assets)}/"
-          f"{min(len(photos), _PHOTO_INLINE_MAX)}")
+          f"{min(len(photos), _PHOTO_INLINE_MAX)}"
+          + (f" ({len(dropped)} not photos, dropped)" if dropped else ""))
 
     # Their own markup is free, so it is read whatever the clock says. Only the
     # search fallback is charged against the budget, alongside press.

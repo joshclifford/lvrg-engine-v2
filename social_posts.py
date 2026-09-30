@@ -40,7 +40,7 @@ import requests
 
 import cost
 from claude_text import first_text
-from intel import _PHOTO_INLINE_MAX, _fetch_one_photo
+from intel import _PHOTO_INLINE_MAX, _fetch_one_photo, _not_a_photo
 
 APIFY_RUN_SYNC = "https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
 
@@ -417,8 +417,10 @@ def _extra_photos(intel: dict) -> dict:
         return {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(urls)) as pool:
         got = list(pool.map(_fetch_one_photo, urls))
+    # Same photo check as intel's own downloads (POD01-268): a website icon
+    # must not stand in for a social post either.
     return {g[0]: "data:%s;base64,%s" % (g[1], base64.b64encode(g[2]).decode("ascii"))
-            for g in got if g}
+            for g in got if g and not _not_a_photo(g[1], g[2])}
 
 
 def _job(intel: dict, meter, deadline: float, result: dict) -> None:

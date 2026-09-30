@@ -202,8 +202,10 @@ def test_every_producer_inlines_its_photos(producer):
 
 def test_scrape_site_fetches_and_publishes_the_assets():
     src = inspect.getsource(intel.scrape_site)
-    assert "fetch_photo_assets(photos)" in src
+    assert "fetch_photo_assets(photos, dropped)" in src
     assert '"photo_assets": photo_assets' in src
+    # What the check dropped leaves the list too, so nothing hotlinks it.
+    assert "photos = [p for p in photos if p not in dropped]" in src
 
 
 # --- undownloadable photos fall back to their url -----------------------------
