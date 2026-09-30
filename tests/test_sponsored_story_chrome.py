@@ -90,14 +90,18 @@ def test_the_offer_is_fixed_markup_so_the_model_cannot_reprice_it(monkeypatch):
     assert "$497" not in _prompt_text(captured)
 
 
-def test_get_listed_gets_none_of_this(monkeypatch):
-    """Scope. A directory profile is a different offer with its own prompt, and
-    widening the chrome to it here would ship it untested."""
+def test_get_listed_gets_the_chrome_but_not_the_story_plans(monkeypatch):
+    """Since POD01-251 the profile sits in the same site chrome, as the live
+    Business Profiles do, with its one $297 offer instead of the monthly plans.
+    More in test_get_listed_profile.py."""
     html, _ = _build(monkeypatch, offer="get_listed",
                      html="<!DOCTYPE html><html><body><h1>Dark Horse</h1></body></html>")
 
-    assert tsd_theme.TSD_LOGO not in html
-    assert "Sponsored Listing:" not in html
+    assert tsd_theme.TSD_LOGO in html
+    assert "Sponsored Listing:" in html
+    assert "$297<em> one time</em>" in html
+    assert "/month</em>" not in html
+    assert "guaranteed impressions" not in html
 
 
 # ── what the model is asked for ──────────────────────────────────────────────
@@ -236,9 +240,11 @@ def test_the_story_prompt_never_hands_the_model_our_booking_link(monkeypatch):
     assert "OUR BOOKING PAGE: NOT in this article" in prompt
 
 
-def test_get_listed_still_gets_the_booking_link_for_its_buttons(monkeypatch):
+def test_get_listed_buttons_carry_the_booking_link_the_prompt_never_sees(monkeypatch):
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
-    generator.generate_offer_lead_magnet_page("get_listed", _intel())
+    html = generator.generate_offer_lead_magnet_page("get_listed", _intel())
 
-    assert "theresandiego.com/letschat?" in _prompt_text(captured)
+    assert "letschat" not in _prompt_text(captured)
+    assert "OUR BOOKING PAGE: NOT in this profile" in _prompt_text(captured)
+    assert "theresandiego.com/letschat?" in html

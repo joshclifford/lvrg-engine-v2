@@ -79,15 +79,19 @@ def test_the_six_required_head_tags_are_all_present(monkeypatch):
     assert _json_ld(html) is not None
 
 
-def test_get_listed_is_left_exactly_as_it_was(monkeypatch):
-    """Scope. A directory profile is not a published article, and POD01-125 asks
-    for none of this. Widening it here would ship untested schema on the other
-    offer under cover of this ticket."""
+def test_get_listed_carries_the_same_tags_with_the_business_as_its_schema(monkeypatch):
+    """POD01-251. The live Business Profiles carry the same head tags as an
+    article (og:type article included); the structured data is the business,
+    which the client's Get Listed page sells as "business + owner schema"."""
     html = _build(monkeypatch, offer="get_listed")
 
-    assert "og:title" not in html
-    assert "application/ld+json" not in html
-    assert 'rel="canonical"' not in html
+    assert _meta(html, "property", "og:title")
+    assert _meta(html, "property", "og:type") == "article"
+    assert f'<link rel="canonical" href="{PUBLIC_BASE}/preview/{SLUG}">' in html
+    data = _json_ld(html)
+    assert data["@type"] == "WebPage"
+    assert data["mainEntity"]["@type"] == "LocalBusiness"
+    assert data["mainEntity"]["name"] == "Dark Horse Coffee Roasters"
 
 
 def test_og_image_survives_photo_inlining_as_a_fetchable_address(monkeypatch):
@@ -312,11 +316,14 @@ def test_a_page_with_no_title_at_all_is_given_one(monkeypatch):
     assert "A Normal Heights Institution" in re.search(r"<title>(.*?)</title>", html, re.DOTALL).group(1)
 
 
-def test_get_listed_keeps_its_own_title(monkeypatch):
+def test_get_listed_gets_the_headline_title_too(monkeypatch):
+    """The chrome writes the profile's document as well now, so a label title
+    is replaced by the headline the same way (POD01-251)."""
     page = _titled(None, "<title>Dark Horse Coffee Roasters | Listing Preview</title>")
     html = _build(monkeypatch, offer="get_listed", html=page)
 
-    assert "<title>Dark Horse Coffee Roasters | Listing Preview</title>" in html
+    assert "<title>Dark Horse Coffee Roasters: A Normal Heights Institution | There San Diego</title>" in html
+    assert "Listing Preview" not in html
 def test_a_headline_naming_the_business_in_short_is_not_prefixed(monkeypatch):
     """Prager Brothers shipped as "Prager Brothers Artisan Breads: Inside
     Carlsbad's Slow-Rise Obsession: How Prager Brothers Turned Bread Into a Daily
@@ -405,7 +412,8 @@ def test_a_name_with_an_ampersand_is_escaped_in_the_headline(monkeypatch):
     assert _h1(html).startswith("Smith &amp; Sons: Inside the Roastery")
 
 
-def test_get_listed_keeps_its_own_headline(monkeypatch):
+def test_get_listed_headline_is_named_too(monkeypatch):
+    """The live profiles open on the name ("Josh Taylor, Realtor: ...")."""
     html = _build(monkeypatch, offer="get_listed", html=UNNAMED)
 
-    assert _h1(html) == "Inside the Roastery Quietly Supplying Half the Neighborhood"
+    assert _h1(html) == "Dark Horse Coffee Roasters: Inside the Roastery Quietly Supplying Half the Neighborhood"

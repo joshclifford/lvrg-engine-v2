@@ -122,14 +122,15 @@ def test_sponsored_story_never_quotes_the_first_look_social_price(monkeypatch):
 
 
 def test_get_listed_sells_delivery_window_and_upgrade_credit(monkeypatch):
+    """Fixed markup since POD01-251: the offer block, not the model, says it."""
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
-    generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical="restaurant")
+    html = generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical="restaurant")
 
-    prompt = _prompt_text(captured)
-    assert "5 business days" in prompt
-    assert "local restaurant" in prompt
+    assert "Live within 5 business days" in html
+    assert "counts as credit toward your first Sponsored Story" in html
+    assert "local restaurant" in _prompt_text(captured)
 
 
 @pytest.mark.parametrize("offer", ["get_listed", "sponsored_story"])
@@ -717,11 +718,10 @@ def test_get_listed_only_promises_menu_and_reservations_to_food(monkeypatch, ver
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
-    generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical=vertical)
+    html = generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical=vertical)
 
-    prompt = _prompt_text(captured)
-    assert FOOD_LINKS_POINT not in prompt
-    assert "Your website and socials all linked in one place." in prompt
+    assert FOOD_LINKS_POINT not in html
+    assert "Your website and socials all linked in one place." in html
 
 
 @pytest.mark.parametrize("vertical", ["restaurant", "cafe"])
@@ -729,9 +729,9 @@ def test_get_listed_food_keeps_tsd_menu_and_reservations_wording(monkeypatch, ve
     captured = []
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
 
-    generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical=vertical)
+    html = generator.generate_offer_lead_magnet_page("get_listed", _intel(), vertical=vertical)
 
-    assert FOOD_LINKS_POINT in _prompt_text(captured)
+    assert FOOD_LINKS_POINT in html
 
 
 def test_get_listed_pins_one_star_rating_format(monkeypatch):

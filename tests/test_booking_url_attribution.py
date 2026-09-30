@@ -65,25 +65,25 @@ def _prompt_for(monkeypatch, offer, prospect_id=""):
     return _prompt_text(captured)
 
 
-def test_the_get_listed_prompt_carries_the_attributed_link(monkeypatch):
-    """Sponsored Story is left out on purpose: its claim bar, plans and buttons
-    are fixed markup, and the story prompt carries no booking link at all
-    (test_sponsored_story_chrome.py) so the model cannot put one in the article."""
-    prompt = _prompt_for(monkeypatch, "get_listed", "poppieco-com")
-    assert "utm_medium=get_listed" in prompt
-    assert "lead_id=poppieco-com" in prompt
+def _page_for(monkeypatch, offer, prospect_id=""):
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+    return generator.generate_offer_lead_magnet_page(offer, _intel(), prospect_id=prospect_id)
 
 
-def test_the_magnet_prompt_never_offers_the_bare_url_as_an_alternative(monkeypatch):
-    """The prompt names the booking page in several places. If any one of them
-    still showed the bare URL, the model could satisfy the instruction with an
-    unattributed link and be technically right."""
-    prompt = _prompt_for(monkeypatch, "get_listed", "poppieco-com")
-    bare = "https://theresandiego.com/letschat"
-    assert bare in prompt
-    # Every mention should be the attributed form: same count of "?" suffixed
-    # occurrences as of the URL itself.
-    assert prompt.count(bare) == prompt.count(bare + "?")
+def test_the_get_listed_page_carries_the_attributed_link(monkeypatch):
+    """Both magnets now put the booking link only in fixed markup (claim bar,
+    offer, buttons), so it is read off the page rather than the prompt."""
+    html = _page_for(monkeypatch, "get_listed", "poppieco-com")
+    assert "utm_medium=get_listed" in html
+    assert "lead_id=poppieco-com" in html
+
+
+def test_neither_magnet_prompt_hands_the_model_the_booking_page(monkeypatch):
+    """A booking link the model holds is one it can put inside the fragment,
+    where every link must go to the business (Felicia Lewis Group, 28 Sep)."""
+    for offer in ("get_listed", "sponsored_story"):
+        assert "letschat" not in _prompt_for(monkeypatch, offer, "poppieco-com"), offer
 
 
 def test_prospect_id_is_threaded_from_the_deploy_path(monkeypatch, tmp_path):
@@ -93,9 +93,10 @@ def test_prospect_id_is_threaded_from_the_deploy_path(monkeypatch, tmp_path):
     monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
     monkeypatch.setattr(generator, "SITES_DIR", str(tmp_path))
 
-    generator.build_offer_page_site("get_listed", _intel(), "poppieco-com")
+    site_dir = generator.build_offer_page_site("get_listed", _intel(), "poppieco-com")
 
-    assert "lead_id=poppieco-com" in _prompt_text(captured)
+    with open(f"{site_dir}/index.html", encoding="utf-8") as f:
+        assert "lead_id=poppieco-com" in f.read()
 
 
 def test_the_smart_site_claim_bar_is_attributed_too(monkeypatch):
@@ -216,8 +217,10 @@ def test_every_other_link_on_the_page_is_left_alone():
 
 
 def test_a_get_listed_page_ships_attributed_even_when_the_model_ignores_the_prompt(monkeypatch):
-    """The 10 Sep failure, as a test. The model was asked for the tracked URL,
-    wrote the bare one on both CTAs, and the page went live that way."""
+    """The 10 Sep failure, as a test: the model wrote the bare booking URL on
+    both CTAs. Since POD01-251 those links sit inside the profile, so they go to
+    the business's own site, and the three buttons that are ours (claim bar,
+    offer card, closing CTA) are fixed markup carrying the tracked link."""
     captured = []
     monkeypatch.setattr(
         generator, "_get_client", lambda **k: _mock_client(captured, html=_bare(2))
@@ -228,8 +231,9 @@ def test_a_get_listed_page_ships_attributed_even_when_the_model_ignores_the_prom
     )
 
     expected = config.build_booking_url("get_listed", "mayamooncollective-com---get-listed")
-    assert html.count(expected) == 2
+    assert html.count(expected.replace("&", "&amp;")) == 3
     assert 'href="https://theresandiego.com/letschat"' not in html
+    assert html.count('<a href="https://darkhorsecoffeeroasters.com">Claim This Listing</a>') == 2
 
 
 def test_a_smart_site_page_ships_attributed_when_the_model_ignores_the_prompt_there(monkeypatch):

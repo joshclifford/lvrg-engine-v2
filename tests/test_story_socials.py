@@ -155,4 +155,5 @@ def test_get_listed_gets_no_follow_line(monkeypatch):
         html="<!DOCTYPE html><html><head></head><body>" + FACTBOX + "</body></html>",
     )
 
-    assert "tsd-follow" not in html
+    # The profile lists its socials under Credentials & Details instead.
+    assert "tsd-follow" not in _article(html)
