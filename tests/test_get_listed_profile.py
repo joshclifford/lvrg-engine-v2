@@ -123,7 +123,18 @@ def test_a_missing_value_is_a_missing_row_not_not_listed():
 def test_only_a_street_address_gets_a_map_link():
     assert "Google Maps" not in tsd_theme.credentials_list(_intel(location="San Diego, CA"), SITE)
     street = tsd_theme.credentials_list(_intel(location="3034 Canon St, San Diego, CA 92106"), SITE)
-    assert 'href="https://maps.google.com/?q=3034+Canon+St,+San+Diego,+CA+92106"' in street
+    assert ('href="https://www.google.com/maps/search/?api=1&amp;query='
+            '3034+Canon+St%2C+San+Diego%2C+CA+92106"') in street
+
+
+def test_a_suite_number_stays_in_the_map_search():
+    """Felicia Lewis Group, 30 Sep: "#205" cut the link at the "#", Google
+    searched "5965 Village Way" and showed the UPS Store next door."""
+    block = tsd_theme.credentials_list(
+        _intel(location="5965 Village Way #205, San Diego, CA 92130"), SITE)
+    href = block.split('href="', 2)[1].split('"')[0]
+    assert "#" not in href
+    assert "%23205" in href and "92130" in href
 
 
 def test_without_the_marker_credentials_go_before_the_second_heading():

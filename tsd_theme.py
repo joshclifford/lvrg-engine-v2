@@ -40,7 +40,7 @@ invent local events would invent local events.
 
 import re
 from html import escape
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 TSD_HOME = "https://theresandiego.com"
 TSD_LOGO = f"{TSD_HOME}/wp-content/uploads/mobile_logo-1.png"
@@ -877,7 +877,10 @@ def credentials_list(intel: dict, own_site_url: str) -> str:
         # A map link only for a street address. "San Diego, CA" on a map is a
         # pin on City Hall.
         if any(c.isdigit() for c in location):
-            maps = "https://maps.google.com/?q=" + "+".join(location.split())
+            # Encoded, not joined with "+": a raw "#" in "#205" ended the URL
+            # there, and Felicia Lewis Group's link searched "5965 Village Way"
+            # and landed on the UPS Store next door.
+            maps = "https://www.google.com/maps/search/?api=1&query=" + quote_plus(location)
             row += f' (<a href="{_e(maps)}" target="_blank" rel="noopener">Google Maps</a>)'
         rows.append(row)
     if intel.get("neighborhood"):
