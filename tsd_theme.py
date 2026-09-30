@@ -55,6 +55,14 @@ DISCLOSURE = (
     "partnered with us to expand its reach in the San Diego community. We only feature "
     "partners we believe our readers would genuinely find valuable."
 )
+# The same disclosure worded for an article. The box above is the one TSD puts on
+# its Get Listed profiles; a story is not a listing (POD01-264). Wording pending
+# Josh's confirmation of what TSD prints on a paid story.
+STORY_DISCLOSURE = (
+    "<strong>Sponsored Story:</strong> This article features a local business that has "
+    "partnered with us to expand its reach in the San Diego community. We only feature "
+    "partners we believe our readers would genuinely find valuable."
+)
 
 NAV = [
     ("Eat + Drink", f"{TSD_HOME}/eat-drink/"),
@@ -420,8 +428,8 @@ def site_header() -> str:
 </header>"""
 
 
-def disclosure() -> str:
-    return f'<div class="tsd-disclosure">{DISCLOSURE}</div>'
+def disclosure(text: str = DISCLOSURE) -> str:
+    return f'<div class="tsd-disclosure">{text}</div>'
 
 
 # The platforms we can draw, in the order they show, with the name a reader
@@ -939,6 +947,7 @@ def render_story_page(article: str, intel: dict, booking_url: str, title: str) -
     return _render_page(
         article, intel, title, claim_bar(booking_url),
         sales_block(booking_url, intel.get("business_name", "")),
+        notice=STORY_DISCLOSURE,
     )
 
 
@@ -956,7 +965,7 @@ def render_profile_page(article: str, intel: dict, booking_url: str, title: str,
 
 
 def _render_page(article: str, intel: dict, title: str, claim: str, offer: str,
-                 vertical: str = "") -> str:
+                 vertical: str = "", notice: str = DISCLOSURE) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -973,7 +982,7 @@ def _render_page(article: str, intel: dict, title: str, claim: str, offer: str,
 {site_header()}
 
 <div class="tsd-container">
-  {disclosure()}
+  {disclosure(notice)}
   <div class="tsd-row">
     <div class="tsd-main">
       <article class="tsd-article">

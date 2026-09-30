@@ -51,11 +51,22 @@ def test_the_page_is_the_there_san_diego_site_not_a_landing_page(monkeypatch):
     assert tsd_theme.TSD_LOGO in html
     for label, url in tsd_theme.NAV:
         assert f'<a href="{url}">{label}</a>' in html
-    assert "Sponsored Listing:" in html
+    assert "Sponsored Story:</strong> This article features" in html
     assert "<span>Business Details</span>" in html
     assert "<span>What's Hot</span>" in html
     assert "<span>Upcoming Events</span>" in html
     assert "There Media Group, LLC" in html
+
+
+def test_the_story_is_disclosed_as_a_story_not_a_listing(monkeypatch):
+    """"Sponsored Listing" is the box TSD puts on its Get Listed profiles. A
+    story is paid too, so it keeps a disclosure, worded for an article (POD01-264)."""
+    story, _ = _build(monkeypatch)
+    profile, _ = _build(monkeypatch, offer="get_listed")
+
+    assert "Sponsored Listing" not in story
+    assert f'<div class="tsd-disclosure">{tsd_theme.STORY_DISCLOSURE}</div>' in story
+    assert f'<div class="tsd-disclosure">{tsd_theme.DISCLOSURE}</div>' in profile
 
 
 def test_the_sidebar_carries_real_tsd_posts_and_events_not_invented_ones(monkeypatch):
