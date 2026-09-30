@@ -219,7 +219,8 @@ def test_every_advertised_number_matches_the_live_tsd_funnel(monkeypatch):
         # Monthly, and said so on the page. One build rendered these as
         # one-time fees while the prompt that asked for them said "per month".
         assert f"{price}<em>/month</em>" in html
-        assert f"{impressions} guaranteed impressions a month" in html
+        # The live card's wording since the cards copied story-plans (30 Sep 2026).
+        assert f"{impressions}/month guaranteed impressions" in html
 
     # Audience figures, verbatim from the client's own "real numbers to hold to"
     # in campaign-advertising.md, which is the list TSD's own reps work from.
@@ -241,6 +242,27 @@ def test_every_advertised_number_matches_the_live_tsd_funnel(monkeypatch):
     captured.clear()
     generator.generate_offer_lead_magnet_page("get_listed", _intel())
     assert "$297" in _prompt_text(captured)
+
+
+def test_each_story_plan_card_has_its_own_checkout_and_a_rep_button(monkeypatch):
+    """The three cards used to share one "Claim This Plan" link to our booking
+    page. On story-plans each card's Get Started opens its own checkout, and
+    Speak with a Rep books a call, which is our booking page."""
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: _mock_client(captured))
+
+    html = generator.generate_offer_lead_magnet_page(
+        "sponsored_story", _intel(), prospect_id="acme-com---sponsored-story")
+
+    for plan in ("local", "citywide", "countywide"):
+        assert f"https://advertise.theresandiego.com/sponsoredstories-{plan}-checkout?" in html, plan
+    assert html.count(">Get Started</a>") == 3
+    assert html.count(">Speak with a Rep</a>") == 3
+    assert "Claim This Plan" not in html
+    # Every one of the six buttons still says which lead it came from.
+    assert html.count("lead_id=acme-com---sponsored-story") >= 6
+    assert "Best for neighborhood restaurants, coffee shops, bars, salons" in html
+    assert "—" not in html
 
 
 def test_offer_magnets_get_the_standalone_page_budget_not_the_fragment_one(monkeypatch):
