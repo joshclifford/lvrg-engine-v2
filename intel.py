@@ -1367,6 +1367,33 @@ Return ONLY valid JSON, no markdown, no explanation."""
         return {}
 
 
+# Licence numbers as the business prints them, for the Get Listed licence row
+# (POD01-272). A regex over their own text, never the model: a licence number
+# it misread is a false statement on the profile. DRE was BRE until 2018, and
+# older footers still say CalBRE for the same number.
+_DRE_RE = re.compile(r"\b(?:Cal)?[DB]RE\b[^0-9\n]{0,20}?(\d{7,8})\b", re.IGNORECASE)
+_CSLB_RE = re.compile(r"\bCSLB\b[^0-9\n]{0,25}?(\d{6,7})\b", re.IGNORECASE)
+# "Lic# 1080250", "License No. 1080250": a California contractor's licence
+# number is its CSLB number. The No/#/Number is required, so "licensed and
+# insured since 2004" is not one.
+_CONTRACTOR_LIC_RE = re.compile(
+    r"\b(?:contractor'?s?\s+)?lic(?:ense|\.)?\s*(?:no\.?|number|#)\s*:?\s*#?\s*(\d{6,7})\b",
+    re.IGNORECASE,
+)
+
+
+def find_licences(text: str) -> dict:
+    """{"dre": ..., "cslb": ...} for the ones their site states. Empty when none."""
+    found = {}
+    dre = _DRE_RE.search(text or "")
+    if dre:
+        found["dre"] = dre.group(1)
+    cslb = _CSLB_RE.search(text or "") or _CONTRACTOR_LIC_RE.search(text or "")
+    if cslb:
+        found["cslb"] = cslb.group(1)
+    return found
+
+
 # The intel stage's share of the caller's 135s build budget. Site generation
 # needs ~82-95s of that and cannot be shortened, so once intel has spent this
 # long the optional enrichment is skipped rather than pushing the whole build
@@ -1504,6 +1531,9 @@ def scrape_site(domain: str, page_url: str = "", meter=None) -> dict:
         # writer sees for voice and detail. Was 1000 when the scrape itself
         # was capped at 4000 — there is room for more now.
         "raw_text": raw_text[:6000],
+        # From the full text, not the 6000-char slice: a licence number lives
+        # in the footer, which is the part the slice cuts off.
+        "licences": find_licences(raw_text),
         # V2 enrichment
         "photos": photos,
         # {original url: data: uri} for the photos we managed to download.

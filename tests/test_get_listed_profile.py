@@ -11,6 +11,8 @@ offer are fixed markup from real data, and the owner quote only survives when
 it is on their website word for word.
 """
 
+import re
+
 import generator
 import tsd_theme
 from test_generate_offer_lead_magnet_page import _intel, _mock_client, _prompt_text
@@ -226,3 +228,97 @@ def test_the_industry_section_changes_with_the_vertical(monkeypatch):
     assert "Start Your Project" in contractor
     assert "What to Order on Your First Visit" in _build(monkeypatch, vertical="restaurant")[1]
     assert "What to Know Before You Reach Out" in _build(monkeypatch, vertical=None)[1]
+
+
+# ── POD01-272: licence, trainer, rating cutoff, sponsored links ──────────────
+
+def test_licences_are_read_off_their_own_text():
+    from intel import find_licences
+
+    assert find_licences("Josh Taylor, Realtor | CA DRE #02009229") == {"dre": "02009229"}
+    assert find_licences("CalBRE# 01234567")["dre"] == "01234567"
+    assert find_licences("CSLB License #1080250")["cslb"] == "1080250"
+    assert find_licences("Licensed & insured. Lic# 1080250")["cslb"] == "1080250"
+    # "Licensed since 2004" and a phone number are not a licence.
+    assert find_licences("Licensed and insured since 2004. Call 619-555-1234.") == {}
+
+
+def test_the_licence_row_leads_credentials_only_for_its_vertical():
+    intel = _intel(licences={"dre": "02009229", "cslb": "1080250"})
+
+    realtor = tsd_theme.credentials_list(intel, SITE, "realtor")
+    assert realtor.index("<li>CA DRE #02009229</li>") < realtor.index("Company:")
+    assert "CSLB" not in realtor
+    assert "<li>CSLB License #1080250</li>" in tsd_theme.credentials_list(intel, SITE, "contractor")
+    for vertical in ("trainer", "cafe", ""):
+        block = tsd_theme.credentials_list(intel, SITE, vertical)
+        assert "DRE" not in block and "CSLB" not in block, vertical
+
+
+def test_no_licence_on_their_site_means_no_licence_row():
+    assert "DRE" not in tsd_theme.credentials_list(_intel(), SITE, "realtor")
+    assert "CSLB" not in tsd_theme.credentials_list(_intel(licences={}), SITE, "contractor")
+
+
+def test_the_licence_reaches_the_built_page(monkeypatch):
+    html, _ = _build(monkeypatch, vertical="contractor", licences={"cslb": "1080250"})
+    assert "<li>CSLB License #1080250</li>" in _article(html)
+
+
+def test_trainers_get_their_own_section_and_directory(monkeypatch):
+    html, prompt = _build(monkeypatch, vertical="trainer")
+
+    assert "<h2>Progress That Clients Can Keep Building On</h2>" in prompt
+    assert "<h2>Start Training</h2>" in prompt
+    assert "a personal trainer or fitness studio" in prompt
+    assert ('<a href="https://theresandiego.com/san-diego-personal-trainers/">'
+            "San Diego Personal Trainers</a>") in html
+
+
+def test_a_rating_under_four_is_not_given_to_the_profile(monkeypatch):
+    _, prompt = _build(monkeypatch, rating=3.9, review_count=40)
+    assert "3.9" not in prompt
+    assert "REVIEWS: None available" in prompt
+
+
+def test_a_rating_of_four_or_more_is(monkeypatch):
+    for rating in (4.0, "4.7"):
+        _, prompt = _build(monkeypatch, rating=rating, review_count=40)
+        assert f"rated {rating}★ from 40 reviews" in prompt, rating
+
+
+def test_the_story_keeps_a_low_rating(monkeypatch):
+    """The cutoff is Get Listed's. The story is untouched."""
+    from test_generate_offer_lead_magnet_page import _mock_client as mock
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: mock(captured))
+    generator.generate_offer_lead_magnet_page("sponsored_story", _intel(rating=3.9, review_count=40))
+    assert "rated 3.9★ from 40 reviews" in _prompt_text(captured)
+
+
+def test_every_link_to_the_business_is_marked_sponsored(monkeypatch):
+    """As on the live TSD profiles: their site, socials and map link carry
+    rel="sponsored nofollow noopener", in the profile and the sidebar."""
+    html, _ = _build(monkeypatch, location="3034 Canon St, San Diego, CA 92106",
+                     email="hello@darkhorse.com",
+                     socials={"instagram_url": "https://www.instagram.com/darkhorsesd/"})
+
+    outbound = [t for t in re.findall(r"<a\b[^>]*>", html)
+                if re.search(r'href="https://(?:www\.)?(?:darkhorse|instagram\.com/darkhorsesd|google)', t)]
+    assert len(outbound) >= 6
+    for tag in outbound:
+        assert tag.count("rel=") == 1 and 'rel="sponsored nofollow noopener"' in tag, tag
+    # TSD's own links (directory, its own Instagram) and the email row stay
+    # plain, as on the live page.
+    assert '<a href="https://theresandiego.com/eat-drink/">Eat + Drink</a>' in html
+    assert '<a href="https://www.instagram.com/theresandiego/" aria-label="Instagram">' in html
+    assert '<a href="mailto:hello@darkhorse.com">' in html
+
+
+def test_a_story_page_links_are_not_marked_sponsored(monkeypatch):
+    from test_generate_offer_lead_magnet_page import _mock_client as mock
+    captured = []
+    monkeypatch.setattr(generator, "_get_client", lambda **k: mock(captured))
+    html = generator.generate_offer_lead_magnet_page(
+        "sponsored_story", _intel(socials={"instagram_url": "https://www.instagram.com/darkhorsesd/"}))
+    assert "sponsored nofollow" not in html

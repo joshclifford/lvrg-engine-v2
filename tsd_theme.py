@@ -153,6 +153,8 @@ DIRECTORIES = {
     "realtor": ("San Diego Realtors", f"{TSD_HOME}/san-diego-realtors/"),
     # The Directory row on the live Elements Design & Build profile, 30 Sep 2026.
     "contractor": ("San Diego Contractors", f"{TSD_HOME}/san-diego-contractors/"),
+    # The Directory row on the live Iron Orr Fitness profile, 1 Oct 2026.
+    "trainer": ("San Diego Personal Trainers", f"{TSD_HOME}/san-diego-personal-trainers/"),
     "restaurant": ("Eat + Drink", f"{TSD_HOME}/eat-drink/"),
     "cafe": ("Eat + Drink", f"{TSD_HOME}/eat-drink/"),
     "bar": ("Eat + Drink", f"{TSD_HOME}/eat-drink/"),
@@ -563,12 +565,14 @@ def _directory(intel: dict, vertical: str = "") -> tuple:
             or DIRECTORIES.get((intel.get("business_type") or "").lower(), DEFAULT_DIRECTORY))
 
 
-def business_details(intel: dict, vertical: str = "") -> str:
+def business_details(intel: dict, vertical: str = "", sponsored: bool = False) -> str:
     """The "Business Details" panel, built only from data we actually hold.
 
     A row is written only when its value exists. The live panel never prints
     "Not listed", and this is the one block a prospect reads as data rather
     than prose, so an empty row here is worse than a short panel.
+
+    `sponsored` marks their website and socials the way a paid listing's are.
     """
     directory = _directory(intel, vertical)
     site = intel.get("page_url") or (f"https://{intel['domain']}" if intel.get("domain") else "")
@@ -598,12 +602,13 @@ def business_details(intel: dict, vertical: str = "") -> str:
       <div class="tsd-dd">{value}</div>
     </div></li>""" for icon, label, value in rows
     )
-    return f"""<div class="tsd-widget">
+    panel = f"""<div class="tsd-widget">
   <div class="tsd-widget-title"><span>Business Details</span></div>
   <ul class="tsd-details">
 {items}
   </ul>
 </div>"""
+    return sponsored_links(panel) if sponsored else panel
 
 
 def whats_hot() -> str:
@@ -858,16 +863,22 @@ def _shown_domain(url: str) -> str:
     return host + path if host else url
 
 
-def credentials_list(intel: dict, own_site_url: str) -> str:
+def credentials_list(intel: dict, own_site_url: str, vertical: str = "") -> str:
     """"Credentials & Details": the hard facts, one row each, only the ones we
     hold. Fixed markup, never the model's: a phone number or a handle the model
     wrote could be somebody else's.
 
-    No licence or name-and-title row. The live profiles have one because the
-    owner sent it in; the scrape does not find licences, and a guessed one is a
-    false statement on a page the business will read.
+    The licence row leads, as on the live profiles, and only when their own
+    site states the number (POD01-272). The live row also names the owner and
+    title ("Josh Taylor, Realtor® | CA DRE #..."); the scrape has a first name
+    at best, so the row is the licence alone rather than a guessed name.
     """
-    rows = [f"Company: {_e(intel.get('business_name'))}"] if intel.get("business_name") else []
+    rows = []
+    licence = _licence_row(intel, vertical)
+    if licence:
+        rows.append(licence)
+    if intel.get("business_name"):
+        rows.append(f"Company: {_e(intel.get('business_name'))}")
     services = [s for s in (intel.get("services") or []) if str(s).strip()]
     if services:
         rows.append("Specialties: " + _e(", ".join(str(s) for s in services[:4])))
@@ -900,6 +911,43 @@ def credentials_list(intel: dict, own_site_url: str) -> str:
 
     items = "\n".join(f"  <li>{row}</li>" for row in rows)
     return f"<h2>Credentials &amp; Details</h2>\n<ul>\n{items}\n</ul>"
+
+
+# The licence each vertical carries on the live profiles, in their wording.
+_LICENCE_LABELS = {
+    "realtor": ("dre", "CA DRE #"),
+    "contractor": ("cslb", "CSLB License #"),
+}
+
+
+def _licence_row(intel: dict, vertical: str) -> str:
+    key, label = _LICENCE_LABELS.get((vertical or "").lower(), ("", ""))
+    number = (intel.get("licences") or {}).get(key) if key else ""
+    return f"{label}{_e(number)}" if number else ""
+
+
+# What ThereSanDiego puts on every link to a paid listing's business, measured
+# off the live Josh Taylor, Elements and Iron Orr profiles on 2 Oct 2026.
+SPONSORED_REL = "sponsored nofollow noopener"
+_A_TAG = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
+_HREF_ATTR = re.compile(r"""\bhref\s*=\s*["']([^"']*)["']""", re.IGNORECASE)
+_REL_ATTR = re.compile(r"""\s+rel\s*=\s*(?:"[^"]*"|'[^']*')""", re.IGNORECASE)
+
+
+def sponsored_links(html: str) -> str:
+    """Every outbound link in `html` marked as paid, the way TSD marks a
+    listing's website, socials and map link (POD01-272). Its own links
+    (directory, guides) and mailto/tel stay as they are, as on the live page."""
+    def _mark(match: "re.Match") -> str:
+        tag = match.group(0)
+        href = _HREF_ATTR.search(tag)
+        if not href or not _HTTP_URL.match(href.group(1)):
+            return tag
+        host = (urlparse(href.group(1)).hostname or "").lower()
+        if host == "theresandiego.com" or host.endswith(".theresandiego.com"):
+            return tag
+        return _REL_ATTR.sub("", tag)[:-1] + f' rel="{SPONSORED_REL}">'
+    return _A_TAG.sub(_mark, html)
 
 
 def photo_gallery(photo_urls: list, business_name: str) -> str:
@@ -1021,11 +1069,12 @@ def render_profile_page(article: str, intel: dict, booking_url: str, title: str,
                   "Claim This Listing"),
         listing_offer_block(booking_url, intel.get("business_name", "")),
         vertical,
+        sponsored=True,
     )
 
 
 def _render_page(article: str, intel: dict, title: str, claim: str, offer: str,
-                 vertical: str = "", notice: str = DISCLOSURE) -> str:
+                 vertical: str = "", notice: str = DISCLOSURE, sponsored: bool = False) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1050,7 +1099,7 @@ def _render_page(article: str, intel: dict, title: str, claim: str, offer: str,
       </article>
     </div>
     <aside class="tsd-side">
-{business_details(intel, vertical)}
+{business_details(intel, vertical, sponsored)}
 {whats_hot()}
 {upcoming_events()}
     </aside>

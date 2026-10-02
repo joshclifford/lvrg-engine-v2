@@ -234,7 +234,8 @@ def test_a_get_listed_page_ships_attributed_even_when_the_model_ignores_the_prom
     expected = config.build_booking_url("get_listed", "mayamooncollective-com---get-listed")
     assert html.count(expected.replace("&", "&amp;")) == 2
     assert 'href="https://theresandiego.com/letschat"' not in html
-    assert html.count('<a href="https://darkhorsecoffeeroasters.com">Claim This Listing</a>') == 2
+    assert html.count('<a href="https://darkhorsecoffeeroasters.com" '
+                      'rel="sponsored nofollow noopener">Claim This Listing</a>') == 2
 
 
 def test_a_smart_site_page_ships_attributed_when_the_model_ignores_the_prompt_there(monkeypatch):

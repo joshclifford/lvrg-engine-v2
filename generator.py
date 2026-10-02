@@ -415,6 +415,26 @@ NO_REVIEW_TEXT_RULE = (
 )
 
 
+# A Get Listed profile shows a rating only from here up (POD01-272, Hamza's
+# call). A 3.6 on the business's own profile works against it.
+GET_LISTED_MIN_RATING = 4.0
+
+
+def _without_low_rating(intel: dict) -> dict:
+    """intel with the rating and count dropped when the rating is under the
+    profile's cutoff. One that is not a number is dropped too: it cannot be
+    shown to clear the cutoff."""
+    rating = intel.get("rating")
+    if rating is None:
+        return intel
+    try:
+        if float(rating) >= GET_LISTED_MIN_RATING:
+            return intel
+    except (TypeError, ValueError):
+        pass
+    return {**intel, "rating": None, "review_count": None}
+
+
 def _build_reviews_block(intel: dict) -> str:
     # Build reviews block. Rating and review count are real data passed in from
     # the app (Google Maps via Apify), never scraped.
@@ -1450,6 +1470,10 @@ GET_LISTED_VERTICAL_FRAMING = {
         "a local shop",
         "what they stock, what is hard to find anywhere else, and the street they sit on",
     ),
+    "trainer": (
+        "a personal trainer or fitness studio",
+        "how they train, who they train, and what their clients work toward",
+    ),
 }
 
 # The one section of a Business Profile that changes with the industry, and the
@@ -1489,6 +1513,14 @@ GET_LISTED_PROFILE_SECTIONS = {
         "real services",
         "Plan Your Visit",
     ),
+    # The one section of the live Iron Orr Fitness profile that fits any
+    # trainer (POD01-272). Iron Orr closes on a line, not a heading.
+    "trainer": (
+        "Progress That Clients Can Keep Building On",
+        "how they keep clients progressing over time: how they measure and recognise progress and "
+        "how training fits around the rest of a client's life, drawn from their own content",
+        "Start Training",
+    ),
 }
 GET_LISTED_DEFAULT_SECTION = (
     "What to Know Before You Reach Out",
@@ -1523,7 +1555,8 @@ def generate_offer_lead_magnet_page(
     same as every other generated page.
     """
     photo_block = _build_photo_block(intel)
-    reviews_block = _build_reviews_block(intel)
+    reviews_block = _build_reviews_block(
+        _without_low_rating(intel) if offer == "get_listed" else intel)
     press_block = _build_press_block(intel)
     # A profile's socials are fixed markup in Credentials & Details and the
     # sidebar, so the model is not handed them to link somewhere else.
@@ -1607,7 +1640,7 @@ WRITE EXACTLY THIS, IN THIS ORDER:
 2. THE OPENING: 2 to 4 short paragraphs in ThereSanDiego's warm, locals-know-locals voice. Founder-led
    and specific when their content supports it: who started it, what they saw, what they set out to
    do differently. Work in what they want visitors to do. Link the business name to {own_site_url}
-   the first time it appears. Never add rel="nofollow": the link counting is part of what they buy.
+   the first time it appears.
 3. ONE PHOTO, if any were supplied: after the opening paragraphs, as
    <figure><img src="..." alt="..."></figure>. Use the first photo given above and no other: the
    gallery further down is built around you from the rest.
@@ -1751,6 +1784,15 @@ fences, no <!DOCTYPE>, no <html>, <head>, <body>, <title>, <style> or <script>, 
    free valuation" expects to reach the business, not There San Diego."""
 
 
+    # A Get Listed profile marks every link to the business as paid, as the live
+    # TSD profiles do (POD01-272). That is done after the build, so the model
+    # writes plain links and is never asked to get the attribute right.
+    link_rel_rule = (
+        'Style them as ordinary editorial links. Never rel="nofollow": the link counting is the point.'
+        if offer == "sponsored_story"
+        else "Write them as plain <a href=\"...\">text</a> links with no rel attribute. The wrapper adds it."
+    )
+
     socials_rule = (
         "Socials, if supplied, go in the footer. They are additional, not a substitute for the website link."
         if offer == "sponsored_story"
@@ -1798,7 +1840,7 @@ Two different destinations. Do not confuse them, and do not let one stand in for
    Use it VERBATIM, including any path. The path is often what separates this business from
    whoever owns the root domain, so trimming it can point the prospect at a different company.
    Never example.com, never "#", never a link to ThereSanDiego instead.
-   Style them as ordinary editorial links. Never rel="nofollow": the link counting is the point.
+   {link_rel_rule}
 
 {booking_link_rule}
 
@@ -1897,8 +1939,10 @@ Two different destinations. Do not confuse them, and do not let one stand in for
     # After the backlink count: the list carries a Website row, and fixed markup
     # must not pass a guard that measures what the model wrote.
     if offer == "get_listed":
-        article = _place_credentials(article, tsd_theme.credentials_list(intel, own_site_url))
+        article = _place_credentials(
+            article, tsd_theme.credentials_list(intel, own_site_url, vertical or ""))
         article = _place_profile_gallery(article, intel, photo_assets)
+        article = tsd_theme.sponsored_links(article)
 
     # Read before inlining. After it this src is a data: URI, and og:image has
     # to be an address a crawler can go and fetch.

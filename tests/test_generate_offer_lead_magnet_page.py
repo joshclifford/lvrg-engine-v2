@@ -509,7 +509,12 @@ def test_both_offers_are_told_to_link_to_the_prospects_real_domain(monkeypatch, 
     assert "https://mayamooncollective.com" in prompt
     # The rule has to say the links matter, not just that they exist.
     assert "never example.com" in prompt
-    assert 'never add rel="nofollow"' in prompt.lower()
+    # A Get Listed profile's links are marked sponsored after the build
+    # (POD01-272), so only the story still forbids nofollow.
+    if offer == "sponsored_story":
+        assert 'never add rel="nofollow"' in prompt.lower()
+    else:
+        assert "nofollow" not in prompt.lower()
 
 
 def test_sponsored_story_asks_for_three_backlinks_in_named_positions(monkeypatch):
