@@ -1671,19 +1671,18 @@ built around you or does not belong on a profile."""
         # plan, an Instagram post rather than an article, and sits on /social-plans.
         # Sponsored Stories are monthly and start at $497. Verified 7 Sep 2026.
         #
-        # This asks for the ARTICLE ONLY. The site header, the sponsored-listing
-        # disclosure, the Business Details sidebar, the plan cards and the footer
-        # are fixed markup in tsd_theme.py, measured off a live ThereSanDiego
-        # profile. Asking the model for a whole page got back a Tailwind landing
+        # This asks for the ARTICLE ONLY. The site header, the sidebar, the posts
+        # under the story, the plan cards and the footer are fixed markup in
+        # tsd_theme.py, measured off a live ThereSanDiego article. Asking the model for a whole page got back a Tailwind landing
         # page with fonts of its own and no site around it, which is the one
         # thing a "here is your story on our site" mockup cannot be.
         page_purpose = f"""You are writing the ARTICLE BODY of a Sponsored Story about {intel['business_name']}:
 a short editorial feature as it would run on ThereSanDiego.com and get promoted to their 70,000+
 monthly audience, built to close an Advertising prospect.
 
-You are NOT building a page. The ThereSanDiego site header, the sponsored-listing disclosure, the
-Business Details sidebar, the plan cards and the footer already exist and will be wrapped around
-what you write. Write the article and nothing else.
+You are NOT building a page. The ThereSanDiego site header, the sidebar, the share buttons and
+related posts, the plan cards and the footer already exist and will be wrapped around what you
+write. Write the article and nothing else.
 
 WRITE EXACTLY THIS, IN THIS ORDER, WITH THESE EXACT CLASS NAMES:
 
@@ -1743,7 +1742,7 @@ WRITE EXACTLY THIS, IN THIS ORDER, WITH THESE EXACT CLASS NAMES:
    - one in the fact box or the closing paragraph, reading as a plain invitation to visit their site
    Use their real URL exactly as given. Plain <a href="...">text</a>, styled by the wrapper, never a
    button. Never add rel="nofollow": the whole point of the placement is that the link counts.
-   Do not link their socials here. The sidebar already carries those.
+   Do not link their socials here. A Follow row with them is added after the story.
 
 Do not write a claim bar, a nav, a pricing table, an impressions guarantee, a reach stat strip, a
 booking button or a footer. Every one of those is already built around you, and a second copy of any
@@ -1972,6 +1971,7 @@ Two different destinations. Do not confuse them, and do not let one stand in for
     if offer == "sponsored_story":
         html = tsd_theme.render_story_page(
             article, intel, booking_url, _story_title(html, intel),
+            preview_page_url(public_base, prospect_id),
         )
     else:
         html = tsd_theme.render_profile_page(

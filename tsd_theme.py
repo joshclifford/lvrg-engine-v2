@@ -32,8 +32,9 @@ static host with no theme behind it.
 Get Listed uses the same chrome around a Business Profile instead of an
 article (render_profile_page, POD01-251), as the live profiles do.
 
-"What's Hot" and "Upcoming Events" are real TSD posts and events with their
-real thumbnails, hardcoded on purpose. They are the same for every prospect:
+The sidebar and the blocks under the story ("What's Hot", "Upcoming Events",
+"Recently Featured", "The Latest", "Related Posts") are real TSD posts and
+events with their real thumbnails, hardcoded on purpose. They are the same for every prospect:
 their job is to make the page read as a live magazine, and a model asked to
 invent local events would invent local events.
 """
@@ -55,14 +56,8 @@ DISCLOSURE = (
     "partnered with us to expand its reach in the San Diego community. We only feature "
     "partners we believe our readers would genuinely find valuable."
 )
-# The same disclosure worded for an article. The box above is the one TSD puts on
-# its Get Listed profiles; a story is not a listing (POD01-264). Wording pending
-# Josh's confirmation of what TSD prints on a paid story.
-STORY_DISCLOSURE = (
-    "<strong>Sponsored Story:</strong> This article features a local business that has "
-    "partnered with us to expand its reach in the San Diego community. We only feature "
-    "partners we believe our readers would genuinely find valuable."
-)
+# A Sponsored Story carries no disclosure box: a TSD article has none, and the
+# preview is meant to look exactly like one (POD01-273, Hamza 1 Oct 2026).
 
 NAV = [
     ("Eat + Drink", f"{TSD_HOME}/eat-drink/"),
@@ -118,6 +113,93 @@ UPCOMING_EVENTS = [
      f"{TSD_HOME}/wp-content/uploads/Magical-Cirque-Christmas-2-952x579.jpg",
      "December 13, 2026", "5:30 pm",
      "", "Oceanside"),
+]
+
+# What a TSD article carries around the story instead of a profile's Business
+# Details and Upcoming Events (POD01-273). Real posts with their real images,
+# read off theresandiego.com/pop-pie-co-carlsbad/ on 2 Oct 2026. The live
+# sidebar titles this "Recently Featured Restaurants" on a food story; one
+# title for every prospect, since the list is the same for every prospect.
+# (title, url, image, neighborhood, excerpt)
+RECENTLY_FEATURED = [
+    ("Dine In at Goop Kitchen's First Sit-Down Restaurant in Del Mar",
+     f"{TSD_HOME}/venue/goop-kitchen-del-mar/",
+     f"{TSD_HOME}/wp-content/uploads/goop-kitchen-2-952x579.jpg", "",
+     "Yes, that goop. Gwyneth Paltrow's brand just opened its first-ever dine-in restaurant at "
+     "One Paseo in Del Mar, and it's a 92-seat space she personally..."),
+    ("Bring the Kids, Bring the Dog: El Punto is Coming to Liberty Station This October",
+     f"{TSD_HOME}/venue/el-punto-liberty-station-restaurant/",
+     f"{TSD_HOME}/wp-content/uploads/El-Punto3-952x579.png", "Liberty Station",
+     "City Tacos has been a San Diego staple since 2014. What Gerry Torres is building next "
+     "makes it look like a warm-up. El Punto at..."),
+    ("Grab a Seat at Zuma, the Global Izakaya Brand Making Its California Debut at the Guild Hotel",
+     f"{TSD_HOME}/venue/zuma-san-diego-modern-japanese-izakaya/",
+     f"{TSD_HOME}/wp-content/uploads/Zuma-2-1-952x579.jpg", "San Diego",
+     "Zuma has spent nearly 25 years taking over the world: Hong Kong, Istanbul, Rome, Miami, "
+     "Madrid, and more. Now they're open in San Diego,..."),
+    ("Eat Like You're on the Amalfi Coast at By The Sea in Coronado",
+     f"{TSD_HOME}/venue/by-the-sea-restaurant-coronado/",
+     f"{TSD_HOME}/wp-content/uploads/By-the-Sea-Coronado-5-952x579.jpg", "Coronado",
+     "Doug and Lara Hamm spent years traveling through the French Riviera, Greek Isles, and "
+     "Amalfi Coast. By The Sea is what happened when they decided..."),
+    ("Take a Gran Turismo Through Northern Italy at Maranello in Little Italy",
+     f"{TSD_HOME}/venue/maranello-restaurant-little-italy/",
+     f"{TSD_HOME}/wp-content/uploads/Maranello-6-952x579.jpg", "Little Italy",
+     "Little Italy has a new dinner spot, and it's one that makes the whole evening feel like "
+     "an occasion. Maranello just opened at 2101 Kettner..."),
+    ("Get Ready for Moniker General's Third San Diego Location, This Time Downtown",
+     f"{TSD_HOME}/venue/get-ready-for-moniker-generals-third-san-diego-location-this-time-downtown/",
+     f"{TSD_HOME}/wp-content/uploads/Rendering-Moniker-General-at-WEST_Credit-Moniker-Design-Studio-952x579.png",
+     "San Diego",
+     "Moniker General is coming downtown, and honestly, it makes all the sense in the world. "
+     "The coffee and cocktail concept that helped shape Liberty Station..."),
+]
+
+# "The Latest" under the story. (title, url, image, excerpt)
+THE_LATEST = [
+    ("Celebrate Jackie's Legacy at Wings Over Big Bear",
+     f"{TSD_HOME}/event/wings-over-big-bear-honoring-jackie-the-eagle/",
+     f"{TSD_HOME}/wp-content/uploads/Wings-Over-Big-Bear-420x290.jpg",
+     "Following the loss of Jackie, the bald eagle whose Big Bear nest captivated millions of "
+     "viewers worldwide, the Big Bear community is coming together to..."),
+    ("Breathe, Stretch, and Go Pink at Otay Ranch Town Center",
+     f"{TSD_HOME}/event/breathe-and-believe-breast-cancer-awareness/",
+     f"{TSD_HOME}/wp-content/uploads/Breast-Cancer-Awareness-Month-1-420x290.jpg",
+     "Unite for a cause at the Breathe & Believe breast cancer awareness event. Enjoy yoga and "
+     "community this October evening."),
+    ("Dive into a Month of Scares at Rooftop Cinema Club",
+     f"{TSD_HOME}/rooftop-cinema-club-san-diego-celebrates-spooky-season/",
+     f"{TSD_HOME}/wp-content/uploads/Rooftop-Cinema-Club-420x290.jpg",
+     "Rooftop Cinema Club, San Diego's favorite outdoor cinema perched five stories above "
+     "Columbia Street, is swapping in costumes and spooky decor for a full month..."),
+    ("Things To Do in San Diego This Weekend",
+     f"{TSD_HOME}/things-to-do-in-san-diego-this-weekend/",
+     f"{TSD_HOME}/wp-content/uploads/La-Mesa-Oktoberfest-35-1-420x290.png",
+     "Check out this week's Things to Do in San Diego This Weekend and make your plans! Sip and "
+     "savor your way through the Del Mar..."),
+    ("Top Concerts in San Diego This Week",
+     f"{TSD_HOME}/concerts-in-san-diego-this-week/",
+     f"{TSD_HOME}/wp-content/uploads/726289719_18378449953204811_6838272706370823707_n-420x290.jpg",
+     "Here are the top concerts in San Diego this week! Catch Michelle Branch, rising country "
+     "star Hudson Westbrook, punk rock legends Social Distortion, and powerhouse..."),
+    ("Sip Pink Tea and Catch a Movie at La Valencia",
+     f"{TSD_HOME}/la-valencia-hotel-october-lineup-for-cozy-evenings/",
+     f"{TSD_HOME}/wp-content/uploads/La-Valencia-7-420x290.jpg",
+     "Fall has officially arrived, and La Valencia Hotel is welcoming back two of its favorite "
+     "autumn traditions: the annual Pink Tea benefiting Susan G. Komen..."),
+]
+
+# "Related Posts", the last block of the main column. (title, url, image)
+RELATED_POSTS = [
+    ("The Craving: San Diego Food + Drink News, Week of September 28, 2026",
+     f"{TSD_HOME}/the-craving-san-diego-restaurants-and-bars/",
+     f"{TSD_HOME}/wp-content/uploads/Opening-Night-Del-Mar-Wine-Food-Festival_credit-@iydeencaptures-420x290.jpg"),
+    ("The Best Dinner in San Diego Won't Tell You Where it is Until the Night Before",
+     f"{TSD_HOME}/san-diegos-secret-dinner-series-inside-the-blank-table/",
+     f"{TSD_HOME}/wp-content/uploads/Kambria-Fischer-1-420x290.jpg"),
+    ("Your Ultimate Guide to The Del Mar Wine + Food Festival",
+     f"{TSD_HOME}/del-mar-wine-food-festival/",
+     f"{TSD_HOME}/wp-content/uploads/DMWFF-420x290.jpg"),
 ]
 
 FOOTER_LINKS = [
@@ -253,6 +335,7 @@ _ICONS = {
     "search": '<path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/>',
     "instagram": '<path d="M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41a3.7 3.7 0 0 1-1.38-.9 3.7 3.7 0 0 1-.9-1.38c-.16-.42-.36-1.06-.41-2.23C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.17 8.8 2.16 12 2.16zM12 6.35a5.65 5.65 0 1 0 0 11.3 5.65 5.65 0 0 0 0-11.3zm0 9.32a3.67 3.67 0 1 1 0-7.34 3.67 3.67 0 0 1 0 7.34zm7.19-9.54a1.32 1.32 0 1 1-2.64 0 1.32 1.32 0 0 1 2.64 0z"/>',
     "facebook": '<path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.1 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12z"/>',
+    "x": '<path d="M18.9 2H22l-7.2 8.2L23 22h-6.6l-5.2-6.8L5.3 22H2.2l7.7-8.8L2 2h6.8l4.7 6.2L18.9 2zm-1.2 18h1.8L7.4 4H5.5l12.2 16z"/>',
     "linkedin": '<path d="M6.94 5a1.94 1.94 0 1 1-3.88 0 1.94 1.94 0 0 1 3.88 0zM3.11 8.4h3.66V21H3.11V8.4zm5.85 0h3.5v1.72h.05c.49-.92 1.68-1.9 3.45-1.9 3.69 0 4.37 2.43 4.37 5.59V21h-3.65v-5.48c0-1.31-.02-3-1.82-3-1.83 0-2.11 1.43-2.11 2.9V21H8.96V8.4z"/>',
     "tiktok": '<path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 1 1 .77-5.06V9.69a5.67 5.67 0 0 0-.77-.05A5.68 5.68 0 1 0 15.54 15.4V9.01a7.35 7.35 0 0 0 4.3 1.38V7.3a4.3 4.3 0 0 1-3.24-1.48z"/>',
     "youtube": '<path d="M21.58 7.19a2.51 2.51 0 0 0-1.77-1.78C18.25 5 12 5 12 5s-6.25 0-7.81.41a2.51 2.51 0 0 0-1.77 1.78A26.2 26.2 0 0 0 2 12a26.2 26.2 0 0 0 .42 4.81 2.51 2.51 0 0 0 1.77 1.78C5.75 19 12 19 12 19s6.25 0 7.81-.41a2.51 2.51 0 0 0 1.77-1.78A26.2 26.2 0 0 0 22 12a26.2 26.2 0 0 0-.42-4.81zM10 15.02V8.98L15.2 12 10 15.02z"/>',
@@ -379,6 +462,40 @@ h1,h2,h3,h4,h5,h6{font-family:'Oswald',Arial,sans-serif;font-weight:400;color:#4
 .tsd-meta span{display:inline-flex;align-items:center;gap:5px}
 .tsd-meta svg{fill:#da195b}
 
+.tsd-row.tsd-no-notice{padding-top:34px}
+.tsd-venue{position:relative;margin-bottom:20px}
+.tsd-venue-image{position:relative}
+.tsd-venue-image img{display:block;width:100%;aspect-ratio:952/579;object-fit:cover;border-radius:5px}
+.tsd-venue-place{position:absolute;left:20px;bottom:21px;background:#fff;border-radius:25px;padding:7px 20px;font-size:12px;font-weight:500;line-height:20.4px;text-transform:uppercase;color:#da195b}
+.tsd-venue-title{display:block;font-family:'Oswald',Arial,sans-serif;font-size:19px;font-weight:400;line-height:26.6px;color:#222;text-decoration:none;margin:19px 0 12px}
+.tsd-venue-title:hover{color:#da195b}
+.tsd-venue p{font-size:14px;line-height:21px;color:#000;margin:0}
+
+.tsd-share{margin-top:30px}
+.tsd-share-title{font-family:'Oswald',Arial,sans-serif;font-size:13px;line-height:16.9px;text-transform:uppercase;color:#333;margin-bottom:10px}
+.tsd-share ul{display:flex;margin:0;padding:0;list-style:none}
+.tsd-share li{flex:1 1 0}
+.tsd-share a{display:flex;align-items:center;justify-content:center;height:45px;color:#fff;font-size:12px;line-height:20.4px;text-decoration:none}
+.tsd-share a span{margin-left:10px}
+.tsd-share svg{fill:#fff}
+.tsd-share .tsd-share-facebook{background:#3b5998}
+.tsd-share .tsd-share-x{background:#1da1f2}
+.tsd-share .tsd-share-linkedin{background:#0077b5}
+
+.tsd-section{margin:30px 0}
+.tsd-section-title{font-size:16px;font-weight:600;line-height:27.2px;color:#4a4a4a;padding:30px 30px 25px;border-bottom:1px solid #eaeaea;margin-bottom:30px}
+.tsd-latest-item{display:flex;align-items:center;margin-bottom:25px}
+.tsd-latest-item>a{flex:0 0 50%;max-width:50%}
+.tsd-latest-item img{display:block;width:100%;aspect-ratio:420/290;object-fit:cover;border-radius:5px}
+.tsd-latest-text{flex:0 0 50%;max-width:50%;padding:25px 30px}
+.tsd-latest-text a{font-family:'Oswald',Arial,sans-serif;font-size:28px;line-height:36.4px;color:#222;text-decoration:none}
+.tsd-latest-text a:hover,.tsd-related a.tsd-related-title:hover{color:#da195b}
+.tsd-latest-text p{font-size:16px;line-height:24px;color:#333;margin:15px 0 0}
+.tsd-related{display:flex;gap:20px}
+.tsd-related>div{flex:1 1 0;min-width:0}
+.tsd-related img{display:block;width:100%;aspect-ratio:420/290;object-fit:cover;border-radius:7px}
+.tsd-related a.tsd-related-title{display:block;font-family:'Oswald',Arial,sans-serif;font-size:18px;line-height:23.4px;color:#222;text-decoration:none;margin:15px 0 10px}
+
 .tsd-guarantee{background:#f2f2f2;padding:46px 15px;margin-top:70px;text-align:center}
 .tsd-guarantee p{font-family:'Oswald',Arial,sans-serif;font-size:1.5rem;font-weight:300;line-height:1.45;max-width:760px;margin:0 auto;color:#1a1a1a}
 .tsd-reach{padding:56px 15px;text-align:center}
@@ -437,6 +554,14 @@ h1,h2,h3,h4,h5,h6{font-family:'Oswald',Arial,sans-serif;font-weight:400;color:#4
   .tsd-article h1{font-size:30px;line-height:1.2}
   .tsd-article h2{font-size:24px;line-height:1.25}
   .tsd-pullquote p{font-size:22px}
+  .tsd-latest-text a{font-size:22px;line-height:1.3}
+}
+@media (max-width:600px){
+  .tsd-latest-item{display:block}
+  .tsd-latest-item>a,.tsd-latest-text{max-width:100%}
+  .tsd-latest-text{padding:15px 0 0}
+  .tsd-related{flex-direction:column}
+  .tsd-share a span{display:none}
 }
 """.replace("%FOOTER_BG%", TSD_FOOTER_BG)
 
@@ -640,6 +765,70 @@ def upcoming_events() -> str:
     return f"""<div class="tsd-widget">
   <div class="tsd-widget-title"><span>Upcoming Events</span></div>
 {chr(10).join(blocks)}
+</div>"""
+
+
+def recently_featured() -> str:
+    items = []
+    for title, url, img, place, excerpt in RECENTLY_FEATURED:
+        tag = f'<span class="tsd-venue-place">{_e(place)}</span>' if place else ""
+        items.append(f"""  <div class="tsd-venue">
+    <div class="tsd-venue-image"><a href="{_e(url)}"><img src="{_e(img)}" alt="" loading="lazy"></a>{tag}</div>
+    <a class="tsd-venue-title" href="{_e(url)}">{_e(title)}</a>
+    <p>{_e(excerpt)}</p>
+  </div>""")
+    return f"""<div class="tsd-widget">
+  <div class="tsd-widget-title"><span>Recently Featured</span></div>
+{chr(10).join(items)}
+</div>"""
+
+
+def share_bar(page_url: str, title: str) -> str:
+    """"Share This Post" under the story, the three buttons the live article
+    carries. They share this preview, the only address the story has."""
+    url, text = quote_plus(page_url or f"{TSD_HOME}/"), quote_plus(title or "")
+    buttons = [
+        ("facebook", "Facebook", f"https://facebook.com/sharer/sharer.php?u={url}&t={text}"),
+        ("x", "X", f"https://twitter.com/intent/tweet?url={url}&text={text}"),
+        ("linkedin", "LinkedIn", f"https://linkedin.com/shareArticle?mini=true&url={url}&title={text}"),
+    ]
+    items = "\n".join(
+        f'    <li><a class="tsd-share-{key}" href="{_e(href)}" target="_blank" rel="noopener">'
+        f"{_icon(key, 14)}<span>{name}</span></a></li>"
+        for key, name, href in buttons
+    )
+    return f"""<div class="tsd-share">
+  <div class="tsd-share-title">Share This Post</div>
+  <ul>
+{items}
+  </ul>
+</div>"""
+
+
+def latest_posts() -> str:
+    items = "\n".join(
+        f"""  <div class="tsd-latest-item">
+    <a href="{_e(url)}"><img src="{_e(img)}" alt="" loading="lazy"></a>
+    <div class="tsd-latest-text"><a href="{_e(url)}">{_e(title)}</a><p>{_e(excerpt)}</p></div>
+  </div>""" for title, url, img, excerpt in THE_LATEST
+    )
+    return f"""<div class="tsd-section">
+  <div class="tsd-section-title">The Latest</div>
+{items}
+</div>"""
+
+
+def related_posts() -> str:
+    items = "\n".join(
+        f"""    <div><a href="{_e(url)}"><img src="{_e(img)}" alt="" loading="lazy"></a>
+      <a class="tsd-related-title" href="{_e(url)}">{_e(title)}</a></div>"""
+        for title, url, img in RELATED_POSTS
+    )
+    return f"""<div class="tsd-section">
+  <div class="tsd-section-title">Related Posts</div>
+  <div class="tsd-related">
+{items}
+  </div>
 </div>"""
 
 
@@ -1052,12 +1241,21 @@ def site_footer() -> str:
 </footer>"""
 
 
-def render_story_page(article: str, intel: dict, booking_url: str, title: str) -> str:
-    """Drop the model's article into the TSD chrome and return a whole page."""
+def render_story_page(article: str, intel: dict, booking_url: str, title: str,
+                      page_url: str = "") -> str:
+    """Drop the model's article into the TSD chrome and return a whole page.
+
+    Laid out as a TSD article rather than a profile (POD01-273): no disclosure
+    box, no Business Details, "Recently Featured" where the profile has
+    "Upcoming Events", and the share bar, The Latest and Related Posts under
+    the story, as on theresandiego.com/pop-pie-co-carlsbad/.
+    """
     return _render_page(
         article, intel, title, claim_bar(booking_url),
         sales_block(booking_url, intel.get("business_name", "")),
-        notice=STORY_DISCLOSURE,
+        notice="",
+        sidebar=f"{whats_hot()}\n{recently_featured()}",
+        after_article=f"{share_bar(page_url, title)}\n{latest_posts()}\n{related_posts()}",
     )
 
 
@@ -1076,7 +1274,11 @@ def render_profile_page(article: str, intel: dict, booking_url: str, title: str,
 
 
 def _render_page(article: str, intel: dict, title: str, claim: str, offer: str,
-                 vertical: str = "", notice: str = DISCLOSURE, sponsored: bool = False) -> str:
+                 vertical: str = "", notice: str = DISCLOSURE, sponsored: bool = False,
+                 sidebar: str = "", after_article: str = "") -> str:
+    if not sidebar:
+        sidebar = f"{business_details(intel, vertical, sponsored)}\n{whats_hot()}\n{upcoming_events()}"
+    top = f"{disclosure(notice)}\n  <div class=\"tsd-row\">" if notice else '<div class="tsd-row tsd-no-notice">'
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1093,17 +1295,15 @@ def _render_page(article: str, intel: dict, title: str, claim: str, offer: str,
 {site_header()}
 
 <div class="tsd-container">
-  {disclosure(notice)}
-  <div class="tsd-row">
+  {top}
     <div class="tsd-main">
       <article class="tsd-article">
 {article}
       </article>
+{after_article}
     </div>
     <aside class="tsd-side">
-{business_details(intel, vertical, sponsored)}
-{whats_hot()}
-{upcoming_events()}
+{sidebar}
     </aside>
   </div>
 </div>

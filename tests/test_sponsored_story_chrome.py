@@ -51,34 +51,63 @@ def test_the_page_is_the_there_san_diego_site_not_a_landing_page(monkeypatch):
     assert tsd_theme.TSD_LOGO in html
     for label, url in tsd_theme.NAV:
         assert f'<a href="{url}">{label}</a>' in html
-    assert "Sponsored Story:</strong> This article features" in html
-    assert "<span>Business Details</span>" in html
     assert "<span>What's Hot</span>" in html
-    assert "<span>Upcoming Events</span>" in html
+    assert "<span>Recently Featured</span>" in html
     assert "There Media Group, LLC" in html
 
 
-def test_the_story_is_disclosed_as_a_story_not_a_listing(monkeypatch):
-    """"Sponsored Listing" is the box TSD puts on its Get Listed profiles. A
-    story is paid too, so it keeps a disclosure, worded for an article (POD01-264)."""
+def test_the_story_is_laid_out_as_an_article_not_a_profile(monkeypatch):
+    """A TSD article has no disclosure box, no Business Details and no Upcoming
+    Events (POD01-273). The Get Listed profile keeps all three, as the live
+    profiles do."""
     story, _ = _build(monkeypatch)
     profile, _ = _build(monkeypatch, offer="get_listed")
 
-    assert "Sponsored Listing" not in story
-    assert f'<div class="tsd-disclosure">{tsd_theme.STORY_DISCLOSURE}</div>' in story
+    for profile_only in ('<div class="tsd-disclosure">', "<span>Business Details</span>",
+                         "<span>Upcoming Events</span>"):
+        assert profile_only not in story, profile_only
+        assert profile_only in profile, profile_only
     assert f'<div class="tsd-disclosure">{tsd_theme.DISCLOSURE}</div>' in profile
+    for story_only in ("<span>Recently Featured</span>", "Share This Post", "The Latest", "Related Posts"):
+        assert story_only in story, story_only
+        assert story_only not in profile, story_only
 
 
-def test_the_sidebar_carries_real_tsd_posts_and_events_not_invented_ones(monkeypatch):
-    """The same five posts and five events on every prospect's page, by design.
-    A model asked to fill a local-events sidebar would invent local events."""
+def test_the_share_bar_latest_and_related_posts_sit_under_the_story(monkeypatch):
     html, _ = _build(monkeypatch)
+    main = html[html.index('<div class="tsd-main">'):html.index('<aside class="tsd-side">')]
+
+    order = ["</article>", "Share This Post", "The Latest", "Related Posts"]
+    positions = [main.index(s) for s in order]
+    assert positions == sorted(positions)
+    for _, url, image, _ in tsd_theme.THE_LATEST:
+        assert url in main and image in main
+    for _, url, image in tsd_theme.RELATED_POSTS:
+        assert url in main and image in main
+
+
+def test_the_share_buttons_share_this_preview(monkeypatch):
+    html, _ = _build(monkeypatch)
+    page = "https%3A%2F%2Fwww.gotheresandiego.com%2Fpreview%2Fdarkhorsecoffeeroasters-com---sponsored-story"
+
+    for sharer in ("facebook.com/sharer/sharer.php?u=", "twitter.com/intent/tweet?url=",
+                   "linkedin.com/shareArticle?mini=true&amp;url="):
+        assert sharer + page in html, sharer
+
+
+def test_the_sidebar_carries_real_tsd_posts_not_invented_ones(monkeypatch):
+    """The same posts on every prospect's page, by design. A model asked to
+    fill a sidebar would invent them."""
+    html, _ = _build(monkeypatch)
+    side = html[html.index('<aside class="tsd-side">'):html.index("</aside>")]
 
     for _, url, image in tsd_theme.WHATS_HOT:
-        assert url in html and image in html
+        assert url in side and image in side
+    for title, url, image, _, _ in tsd_theme.RECENTLY_FEATURED:
+        assert url in side and image in side
+    assert side.index("What's Hot") < side.index("Recently Featured")
     for event in tsd_theme.UPCOMING_EVENTS:
-        _, url, image, day = event[:4]
-        assert url in html and image in html and day in html
+        assert event[1] not in html
 
 
 def test_the_article_lands_in_the_main_column(monkeypatch):
@@ -164,16 +193,17 @@ def test_a_lead_with_nothing_to_show_gets_no_post_section(monkeypatch):
 
 def test_the_sidebars_website_row_does_not_satisfy_the_backlink_guard(monkeypatch, capsys):
     """The Business Details panel links to the prospect's site because the live
-    one does. Counted after the wrap, a story with two backlinks would pass a
-    guard that exists because a story shipped with none."""
-    two = FRAGMENT.replace(
+    one does. A story no longer has the panel (POD01-273); a profile does, and
+    counted after the wrap, a profile with one backlink would pass a guard that
+    exists because a page shipped with none."""
+    one = FRAGMENT.replace(
         '<p>Visit <a href="https://darkhorsecoffeeroasters.com">their site</a> to order a bag.</p>',
         "<p>Visit them to order a bag.</p>",
-    )
-    html, _ = _build(monkeypatch, html=two)
+    ).replace('<a href="https://darkhorsecoffeeroasters.com">wholesale program</a>', "wholesale program")
+    html, _ = _build(monkeypatch, html=one, offer="get_listed")
 
-    assert "https://darkhorsecoffeeroasters.com" in html  # the sidebar row is there
-    assert "carries 2 link(s)" in capsys.readouterr().out
+    assert '<span>Business Details</span>' in html
+    assert "carries 1 link(s)" in capsys.readouterr().out
 
 
 def test_og_image_is_the_story_photo_not_the_there_san_diego_logo(monkeypatch):
@@ -199,7 +229,8 @@ def test_the_description_is_the_story_not_the_sponsorship_disclosure(monkeypatch
 def test_the_fact_panel_omits_a_row_rather_than_printing_not_listed(monkeypatch):
     """The live panel never writes "Not listed". This is the one block a
     prospect reads as data rather than prose."""
-    html, _ = _build(monkeypatch, intel=_intel(phone="", neighborhood="", location=""))
+    html, _ = _build(monkeypatch, offer="get_listed",
+                     intel=_intel(phone="", neighborhood="", location=""))
 
     panel = html[html.index("Business Details"):html.index("<span>What's Hot</span>")]
     assert "Not listed" not in panel

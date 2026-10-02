@@ -23,10 +23,6 @@ FACTBOX = ('<div class="tsd-factbox"><h3>The Details</h3><ul>'
            '<li><strong>Phone:</strong> 555-1234</li></ul></div>')
 
 
-def _sidebar(html):
-    return html[html.index("<span>Business Details</span>"):html.index("<span>What's Hot</span>")]
-
-
 def _article(html):
     return html[html.index('<article class="tsd-article">'):html.index("</article>")]
 
@@ -115,13 +111,13 @@ def test_no_socials_leaves_the_story_untouched():
 
 # ── the built page ───────────────────────────────────────────────────────────
 
-def test_a_built_story_carries_icons_in_the_sidebar_and_a_follow_line(monkeypatch):
+def test_a_built_story_carries_its_socials_in_a_follow_line(monkeypatch):
+    """The story has no Business Details panel (POD01-273), so the Follow line
+    at the end of the story is where its socials are."""
     html, _ = _build(monkeypatch, html=FRAGMENT + FACTBOX, intel=_intel(socials=ALL))
 
-    sidebar = _sidebar(html)
-    assert "SOCIAL" in sidebar.upper()
-    assert sidebar.count('class="tsd-social-icon"') == 4
-    assert ">Instagram</a>" not in sidebar  # the old plain-word links
+    assert "<span>Business Details</span>" not in html
+    assert html.count('class="tsd-social-icon"') == 4
 
     article = _article(html)
     assert '<li class="tsd-follow">' in article
