@@ -913,10 +913,12 @@ def credentials_list(intel: dict, own_site_url: str, vertical: str = "") -> str:
     return f"<h2>Credentials &amp; Details</h2>\n<ul>\n{items}\n</ul>"
 
 
-# The licence each vertical carries on the live profiles, in their wording.
+# The licence each vertical carries on the live profiles. Labelled like the
+# rows under it: the live row reads as a licence because the owner's name and
+# title sit in front of it, and a bare "CA DRE #..." without them does not.
 _LICENCE_LABELS = {
-    "realtor": ("dre", "CA DRE #"),
-    "contractor": ("cslb", "CSLB License #"),
+    "realtor": ("dre", "License: CA DRE #"),
+    "contractor": ("cslb", "License: CSLB #"),
 }
 
 

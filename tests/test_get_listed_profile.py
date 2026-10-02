@@ -247,9 +247,9 @@ def test_the_licence_row_leads_credentials_only_for_its_vertical():
     intel = _intel(licences={"dre": "02009229", "cslb": "1080250"})
 
     realtor = tsd_theme.credentials_list(intel, SITE, "realtor")
-    assert realtor.index("<li>CA DRE #02009229</li>") < realtor.index("Company:")
+    assert realtor.index("<li>License: CA DRE #02009229</li>") < realtor.index("Company:")
     assert "CSLB" not in realtor
-    assert "<li>CSLB License #1080250</li>" in tsd_theme.credentials_list(intel, SITE, "contractor")
+    assert "<li>License: CSLB #1080250</li>" in tsd_theme.credentials_list(intel, SITE, "contractor")
     for vertical in ("trainer", "cafe", ""):
         block = tsd_theme.credentials_list(intel, SITE, vertical)
         assert "DRE" not in block and "CSLB" not in block, vertical
@@ -262,7 +262,7 @@ def test_no_licence_on_their_site_means_no_licence_row():
 
 def test_the_licence_reaches_the_built_page(monkeypatch):
     html, _ = _build(monkeypatch, vertical="contractor", licences={"cslb": "1080250"})
-    assert "<li>CSLB License #1080250</li>" in _article(html)
+    assert "<li>License: CSLB #1080250</li>" in _article(html)
 
 
 def test_trainers_get_their_own_section_and_directory(monkeypatch):
